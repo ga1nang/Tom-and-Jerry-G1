@@ -41,7 +41,8 @@ CHASER_SIGN = (1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 0.0)
 
 def add_game_args(p):
   """Game settings shared by train_chase.py and eval_chase.py."""
-  p.add_argument("--legs", default="runs/g1_sprint2/model_3999.pt", help="frozen locomotion policy")
+  # g1_turn/model_4349: runs 5 m/s and turns (slowly); g1_sprint2 can't turn. See EXPERIMENTS.md.
+  p.add_argument("--legs", default="runs/g1_turn/model_4349.pt", help="frozen locomotion policy")
   p.add_argument("--arena", type=float, default=20.0, help="side of the square arena (m)")
   p.add_argument("--catch_radius", type=float, default=0.8, help="pelvis distance that counts as a catch (m)")
   p.add_argument("--game_s", type=float, default=20.0, help="the runner wins after this many seconds")

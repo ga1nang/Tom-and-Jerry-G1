@@ -20,7 +20,7 @@ uv run python eval_walk.py --checkpoint runs/g1_walk/model_1499.pt --video video
 uv run python eval_walk.py --checkpoint runs/g1_walk/model_1499.pt --speed 2.0  # fixed straight command; prints commanded vs achieved speed
 uv run python eval_walk.py --checkpoint runs/g1_walk/model_1499.pt --turn 0.7   # turn in place (add --speed to turn while moving)
 uv run python train_walk.py --speed_stages 0:4 300:5 --fell_over -200 --pose_running_scale 1.5 --speed_shortfall -1 --yaw_error -1  # speed curriculum + reward overrides (see --help)
-uv run python train_chase.py --legs runs/g1_sprint2/model_3999.pt               # runner vs chaser game on frozen legs -> runs/chase
+uv run python train_chase.py --legs runs/g1_turn/model_4349.pt                   # runner vs chaser game on frozen legs -> runs/chase
 uv run python eval_chase.py --runner flee --chaser pursue                         # scripted baselines; --checkpoint for the learned policy, --video DIR
 uv run tensorboard --logdir runs
 uv run list-envs                                           # list mjlab task IDs usable with --task
