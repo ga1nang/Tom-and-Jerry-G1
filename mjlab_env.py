@@ -79,12 +79,12 @@ def set_custom_speed_stages(cfg, speed_stages, steps_per_iter):
   ]
 
 
-def set_fixed_speed(cfg, speed):
-  """Every robot is told the same thing: go straight ahead at `speed` m/s."""
+def set_fixed_speed(cfg, speed, turn=0.0):
+  """Every robot is told the same thing: go ahead at `speed` m/s while turning at `turn` rad/s."""
   twist = cfg.commands["twist"]
   twist.ranges.lin_vel_x = (speed, speed)
   twist.ranges.lin_vel_y = (0.0, 0.0)
-  twist.ranges.ang_vel_z = (0.0, 0.0)
+  twist.ranges.ang_vel_z = (turn, turn)
   twist.rel_standing_envs = 0.0
   twist.rel_forward_envs = 0.0  # these robots get abs(speed) clamped to >= 0.3
   twist.rel_world_envs = 0.0
@@ -133,7 +133,7 @@ class MjlabEnv:
   def __init__(
     self, task, num_envs, device, play=False, video_dir=None, video_steps=1000,
     stage_iters=None, speed_stages=None, steps_per_iter=24, fixed_speed=None, rewards=None,
-    external_commands=False, viewer=None,
+    external_commands=False, viewer=None, fixed_turn=0.0,
   ):
     # play=True: evaluation version of the task (no pushes, no sensor noise, no time limit).
     cfg = load_env_cfg(task, play=play)
@@ -143,7 +143,7 @@ class MjlabEnv:
     if speed_stages is not None:
       set_custom_speed_stages(cfg, speed_stages, steps_per_iter)
     if fixed_speed is not None:
-      set_fixed_speed(cfg, fixed_speed)
+      set_fixed_speed(cfg, fixed_speed, fixed_turn)
     if external_commands:
       set_external_commands(cfg)
     if rewards:
@@ -173,6 +173,13 @@ class MjlabEnv:
     env = self.env.unwrapped
     commanded = env.command_manager.get_command("twist")[:, 0]
     actual = env.scene["robot"].data.root_link_lin_vel_b[:, 0]
+    return commanded, actual
+
+  def turn_rate(self):
+    """Commanded and actual turning speed (rad/s, about the pelvis z axis) of every robot."""
+    env = self.env.unwrapped
+    commanded = env.command_manager.get_command("twist")[:, 2]
+    actual = env.scene["robot"].data.root_link_ang_vel_b[:, 2]
     return commanded, actual
 
   def time_since_reset(self):
