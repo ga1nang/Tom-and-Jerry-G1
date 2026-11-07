@@ -11,7 +11,7 @@ the first 2 s after every spawn skipped. "Falls" means falls per robot-minute.
 | `g1_walk` | scratch | 0-1499 | defaults, 4096 envs | 0.93 m/s @ 1, 1.77 @ 2, 2.26 @ 3 (59 falls @ 3). mjlab's speed stages start at iteration 5000, so this run never got commands above 1 m/s. |
 | `g1_run` | `g1_walk/model_1499` | 1500-2999 | `--stage_iters 0 500 --fell_over -200 --pose_running_scale 1.5` | 2.98 @ 3, 3.89 @ 4 (0 falls), 4.41 @ 5 (4.2 falls), even though training commands stopped at 3 m/s |
 | `g1_sprint` | `g1_run/model_2999` | 3000-3999 | `--num_envs 8192 --num_minibatches 8 --speed_stages 0:4 300:5 --fell_over -200 --pose_running_scale 1.5` | 3.00 @ 3 (0 falls), **0.35 @ 4, 0.00 @ 5 (0 falls): stands still** (see below) |
-| `g1_sprint2` | `g1_run/model_2999` | 3000-3999 | same as `g1_sprint` + `--speed_shortfall -1` | **5.05 @ 5, 4.08 @ 4, 3.04 @ 3**, 0 falls at every speed and with random commands |
+| `g1_sprint2` | `g1_run/model_2999` | 3000-3999 | same as `g1_sprint` + `--speed_shortfall -1` | **5.05 @ 5, 4.08 @ 4, 3.04 @ 3**, 0 falls at every speed and with random commands. **It can't turn** (see below). |
 
 ## Failure: the policy stands still when told to run at 4-5 m/s (`g1_sprint`)
 
@@ -68,3 +68,77 @@ uv run python train_walk.py --resume runs/g1_run/model_2999.pt --log_dir runs/g1
 **Lesson:** after any run that raises the top speed, check `eval_walk.py --speed` at the new top
 speed. The training curves average over all commands and hide a policy that stands still at
 the top of the range.
+
+## Failure: the legs don't turn (`g1_run` → `g1_sprint2`)
+
+**What happens.** We found this when the runner vs chaser game's robots couldn't steer.
+Commanded to turn at 0.7 rad/s, `g1_sprint2/model_3999` doesn't turn at any speed:
+
+| command | `g1_run/2999` yaw rate | `g1_sprint2/3999` yaw rate |
+|---|---|---|
+| 0 m/s, 0.7 rad/s (turn in place) | 0.15 | 0.00 |
+| 0.5 m/s, 0.7 rad/s | 0.44 | 0.00 |
+| 1 m/s, -0.7 rad/s | -0.38 | -0.03 |
+| 3 m/s, 0.7 rad/s | 0.20 | 0.06 |
+| 5 m/s, 0.7 rad/s | 0.08 (falls) | -0.01 |
+
+These were measured with a throwaway script (8 robots per command, 6 s, the first 2 s skipped).
+`eval_walk.py --turn 0.7` now prints the same check. Forward speed still matches the command
+exactly. `eval_walk.py` used to print only forward speed, so nobody noticed.
+
+**When it started.** Turning got worse over the whole run history. Logged
+`Episode_Reward/track_angular_velocity` (2.0 is perfect tracking):
+- `g1_run`: 0.75, falling to 0.37
+- `g1_sprint`: about 0.3
+- `g1_sprint2`: 0.16, falling to 0.055
+
+**Why: the same exp() trap as standing still.** mjlab's turning reward is
+`exp(-(yaw error² + roll rate² + pitch rate²) / 0.5)`. A running torso rocks in roll and pitch,
+and that alone pushes the term close to 0 at speed: at 5 m/s with no turn commanded, the
+running policy got 0.76 of 2.0 (table above). So turning or not barely changes the reward, and
+there's nothing to learn from. Turning in place is rarely commanded, because forward commands
+are uniform over -2 to 5 m/s.
+
+**Fix: `--yaw_error W`** (`mjlab_env.yaw_error`). It adds a penalty of W × |commanded − actual
+yaw rate|, in rad/s, and ignores roll and pitch. Like `--speed_shortfall`, it's linear, so
+every bit of turning pays. At 5 m/s with no turn commanded, the running gait's yaw wobble
+already measures 0.42 rad/s, so with W = -1 the penalty also discourages pelvis twist and may
+cost a little top speed.
+
+**Next run (not run yet):** fine-tune `g1_sprint2` with the penalty added and nothing else
+changed:
+
+```bash
+uv run python train_walk.py --resume runs/g1_sprint2/model_3999.pt --log_dir runs/g1_turn \
+  --num_envs 8192 --num_minibatches 8 --iterations 500 \
+  --speed_stages 0:5 --fell_over -200 --pose_running_scale 1.5 --speed_shortfall -1 --yaw_error -1
+```
+
+Check it with `eval_walk.py --turn 0.7`, `--speed 3 --turn 0.7`, `--speed 5`, and random
+commands.
+
+**Lesson:** check every command axis (`--speed`, `--turn`), not just the one being pushed.
+
+## Game: runner vs chaser (`chase_env.py`)
+
+The sprint legs are frozen, and a game policy picks each robot's command 10 times per second.
+Rules are in `chase_env.py`'s docstring.
+
+**Status:** the env is built and checked:
+- nobody moving gives 100% runner wins at exactly 20 s;
+- starting 0.5 m apart is an instant catch;
+- running into the wall is `runner_out`;
+- a tipped-over robot is `chaser_fell`;
+- rewards sum to exactly 0;
+- training, resume and the overhead video all work.
+
+Training speed: 10.4 s per iteration at 2048 games (4096 robots), 1.3 GB of GPU memory.
+
+**Blocked on turning.** With `g1_sprint2` legs, no robot can steer. Scripted `flee` vs
+`pursue` came out 92% runner wins, 8% catches and 0 falls, but that measures robots that can't
+turn, so it's not a real baseline. Re-measure it, then train, once the legs turn:
+
+```bash
+uv run python eval_chase.py --runner flee --chaser pursue --legs runs/g1_turn/model_4499.pt
+uv run python train_chase.py --legs runs/g1_turn/model_4499.pt --log_dir runs/chase
+```
