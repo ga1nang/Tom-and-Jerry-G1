@@ -20,6 +20,8 @@ p.add_argument("--num_envs", type=int, default=4096)
 p.add_argument("--iterations", type=int, default=1500)
 p.add_argument("--log_dir", default="runs/g1_walk")
 p.add_argument("--resume", default=None, help="checkpoint to continue from")
+p.add_argument("--num_steps", type=int, default=PPOConfig.num_steps, help="steps per robot between updates")
+p.add_argument("--num_minibatches", type=int, default=PPOConfig.num_minibatches)
 # Speed curriculum, counted from the start of this run (also after --resume).
 stages = p.add_mutually_exclusive_group()
 stages.add_argument("--stage_iters", type=int, nargs=2, metavar=("A", "B"), default=None,
@@ -40,7 +42,7 @@ if args.fell_over is not None and args.fell_over > 0:
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 print("device:", device)
-cfg = PPOConfig()
+cfg = PPOConfig(num_steps=args.num_steps, num_minibatches=args.num_minibatches)
 env = MjlabEnv(
   args.task, args.num_envs, device,
   stage_iters=args.stage_iters, speed_stages=args.speed_stages, steps_per_iter=cfg.num_steps,
