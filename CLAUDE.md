@@ -17,6 +17,8 @@ uv run python train_walk.py --num_envs 64 --iterations 2 --log_dir runs/smoke   
 uv run python train_walk.py --resume runs/g1_walk/model_1499.pt --iterations 500  # continue training
 uv run python eval_walk.py --checkpoint runs/g1_walk/model_1499.pt               # count falls over 64 robots
 uv run python eval_walk.py --checkpoint runs/g1_walk/model_1499.pt --video videos/walk  # record an mp4 (1 robot)
+uv run python eval_walk.py --checkpoint runs/g1_walk/model_1499.pt --speed 2.0  # fixed straight command; prints commanded vs achieved speed
+uv run python train_walk.py --stage_iters 300 800 --fell_over -200 --pose_running_scale 1.5  # speed curriculum + reward overrides (see --help)
 uv run tensorboard --logdir runs
 uv run list-envs                                           # list mjlab task IDs usable with --task
 ```
@@ -38,7 +40,8 @@ Non-obvious details that matter when changing things:
 - **Adaptive LR:** the learning rate is adjusted for every minibatch from the KL against the stored rollout `mu`/`sigma`. It is kept in `state["lr"]` and saved to checkpoints.
 - **`PPOConfig` defaults intentionally mirror mjlab's rsl_rl config** for this task (`mjlab/tasks/velocity/config/g1/rl_cfg.py`). Use that file as the reference when tuning.
 - **Checkpoints** (`model_{it}.pt`, every `save_every` iterations plus the final one) store `cfg` and `dims`. This lets `load_actor_critic` rebuild the network without creating an env. Renaming `ActorCritic` submodules or parameters breaks loading of existing checkpoints in `runs/`. `--resume` restores model, optimizer, LR, and iteration, but uses the *current* `PPOConfig()`, not the saved one. `--iterations` counts additional iterations.
-- **`log_keys`** in `train_walk.py` must exactly match keys in mjlab's `extras["log"]` (e.g. `Episode_Termination/fell_over`). Keys that don't match are silently skipped.
+- **Task overrides live in `mjlab_env.py`**: `set_speed_stages`, `set_fixed_speed` and `override_rewards` edit the deep-copied env cfg before `ManagerBasedRlEnv` is built. The speed curriculum (`curriculum["command_vel"]`) counts env steps since the *process* started (24 per iteration) and only applies on robot resets. mjlab's own stages start at iterations 5000/10000, so a default 1500-iteration run never trains above 1 m/s forward. Reward weights are multiplied by `step_dt` (0.02 s).
+- **`log_keys`** in `train_walk.py` must exactly match keys in mjlab's `extras["log"]` (e.g. `Episode_Termination/fell_over`). Keys that don't match are silently skipped. `Episode_Reward/<term>` is added automatically for every term with a nonzero weight (`MjlabEnv.reward_terms`). Only `print_keys` are shown on the console line.
 - **Eval fall counting** relies on play mode having no time limit, so every `terminated` is a fall. `eval_walk.py` hardcodes `0.02` s per step for the video length. That equals the task's `step_dt` (timestep 0.005 × decimation 4), so update it if the task's timing changes.
 
 `runs/` (TensorBoard logs plus about 5 MB per checkpoint) and `videos/` are **not** in `.gitignore`, so don't commit them by accident.
