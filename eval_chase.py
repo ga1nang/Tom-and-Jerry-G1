@@ -6,8 +6,9 @@ import os
 
 import torch
 
-from chase_env import CHASER_WIN, OUTCOMES, ChaseEnv, add_game_args, game_kwargs
+from chase_env import CHASER_FELL, CHASER_WIN, OUTCOMES, RUNNER_FELL, ChaseEnv, add_game_args, game_kwargs
 from ppo import load_actor_critic
+from terrain import TERRAINS
 
 p = argparse.ArgumentParser()
 p.add_argument("--checkpoint", default=None, help="game policy (not needed if both sides are scripted)")
@@ -34,6 +35,9 @@ if args.checkpoint:
 actor_obs, _ = env.reset()
 first = torch.full((G,), -1, dtype=torch.long, device=device)  # result of each slot's first game
 first_len = torch.zeros(G, device=device)
+# --terrain: decisions each role spent on each terrain type, and where robots fell (first games only).
+time_on = torch.zeros(2, len(TERRAINS), device=device)
+fell_on = torch.zeros(len(TERRAINS), device=device)
 # Video: play for game_s seconds whatever happens. Otherwise: until every slot finished a game.
 decisions = round(args.game_s / 0.1)
 step = 0
@@ -46,8 +50,14 @@ with torch.no_grad():
       actions[:G] = env.flee()
     if args.chaser == "pursue":
       actions[G:] = env.pursue()
+    playing = first < 0
     actor_obs, _, _, _, _, _ = env.step(actions)
     new = (first < 0) & (env.outcome >= 0)
+    if env.terrain is not None:  # terrain_under: the ground under each robot when this decision started
+      for role, under in enumerate((env.terrain_under[:G], env.terrain_under[G:])):
+        time_on[role] += torch.bincount(under[playing], minlength=len(TERRAINS))
+      fell_on += torch.bincount(env.terrain_under[:G][new & (env.outcome == RUNNER_FELL)], minlength=len(TERRAINS))
+      fell_on += torch.bincount(env.terrain_under[G:][new & (env.outcome == CHASER_FELL)], minlength=len(TERRAINS))
     first[new] = env.outcome[new]
     first_len[new] = env.length_s[new]
     step += 1
@@ -55,12 +65,19 @@ with torch.no_grad():
 done = first >= 0
 counts = torch.bincount(first[done], minlength=len(OUTCOMES)).float()
 n = int(done.sum())
-print(f"runner: {args.runner} | chaser: {args.chaser} | games: {n} | arena {args.arena:.0f} m")
+print(f"runner: {args.runner} | chaser: {args.chaser} | games: {n} | arena {args.arena:.0f} m"
+      + (" | terrain" if args.terrain else ""))
 for k, name in enumerate(OUTCOMES):
   print(f"  {name:11s} {counts[k].item() / max(n, 1):6.1%}")
 caught = first == CHASER_WIN
 if caught.any():
   print(f"  mean catch time: {first_len[caught].mean().item():.1f} s")
+if args.terrain:
+  share = time_on / time_on.sum(dim=1, keepdim=True)
+  print("  time on each terrain (runner / chaser): "
+        + " | ".join(f"{name} {share[0, k]:.0%} / {share[1, k]:.0%}" for k, name in enumerate(TERRAINS)))
+  print("  falls by the terrain the robot was on: "
+        + " | ".join(f"{name} {int(fell_on[k])}" for k, name in enumerate(TERRAINS)))
 env.close()
 if args.video:
   vids = sorted(glob.glob(os.path.join(args.video, "**", "*.mp4"), recursive=True), key=os.path.getmtime)
