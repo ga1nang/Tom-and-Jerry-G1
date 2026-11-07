@@ -156,12 +156,43 @@ Rules are in `chase_env.py`'s docstring.
 
 Training speed: 10.4 s per iteration at 2048 games (4096 robots), 1.3 GB of GPU memory.
 
-**Blocked on turning.** With `g1_sprint2` legs, no robot can steer. Scripted `flee` vs
-`pursue` came out 92% runner wins, 8% catches and 0 falls, but that measures robots that can't
-turn, so it's not a real baseline. `g1_turn/model_4349` turns, but only at about 0.2 rad/s.
-Re-measure the baseline, then train, once the legs turn well:
+With `g1_sprint2` legs, no robot could steer: scripted `flee` vs `pursue` came out 92% runner
+wins and 8% catches, which isn't a real baseline. All results below use
+`g1_turn/model_4349` legs, which turn at about 0.2 rad/s.
 
-```bash
-uv run python eval_chase.py --runner flee --chaser pursue --legs runs/g1_turn/model_4349.pt
-uv run python train_chase.py --legs runs/g1_turn/model_4349.pt --log_dir runs/chase
-```
+**Run `chase`:** `train_chase.py --legs runs/g1_turn/model_4349.pt --log_dir runs/chase`, with
+defaults of 2048 games and 500 iterations. It took 84 minutes at 10.1 s per iteration.
+
+Results with 256 games each and the mean (deterministic) action. Percentages are outcomes of
+each game:
+
+| chaser vs runner | caught | time up | runner fell | chaser fell | runner out | chaser out |
+|---|---|---|---|---|---|---|
+| scripted `pursue` vs scripted `flee` (baseline) | 27.7 | 68.0 | 1.6 | 2.3 | 0.0 | 0.4 |
+| **learned** (`model_499`) vs `flee` | **87.9** | 5.9 | 2.7 | 0.8 | 0.0 | 2.7 |
+| `pursue` vs **learned** (`model_499`) | 3.5 | **77.7** | 2.0 | 2.0 | 14.8 | 0.0 |
+| learned vs learned (`model_499`) | 42.6 | 9.4 | 4.3 | 5.5 | 37.1 | 1.2 |
+| learned (`model_249`) vs `flee` | 83.6 | 12.1 | 0.4 | 1.6 | 0.0 | 2.3 |
+| `pursue` vs learned (`model_249`) | 2.7 | 60.5 | 6.2 | 1.2 | 29.3 | 0.0 |
+
+- **Both learned roles beat the scripted ones.**
+  - The learned chaser wins 91% of games against `flee`, where `pursue` wins 29%.
+  - The learned runner wins 80% against `pursue`, where `flee` wins 70%.
+- **The runner's weak spot is the walls.** It is almost never caught by `pursue` (3.5%), but
+  leaves the arena in 15% of games, down from 29% at iteration 249. Turning at about 0.2 rad/s,
+  it can't steer back in time near a wall.
+- **The learned chaser exploits that.** Against the learned runner, 37% of games end with the
+  runner pushed out of the arena.
+- **The two learned sides are unbalanced:** the chaser side wins 84% of learned vs learned
+  games. Win rates between them swing a lot during training (chaser 24-57%), which is normal
+  for self-play, so judge progress against the scripted players.
+- **Action std grew from 0.5 to 1.04.** Actions are clamped to [-1, 1], so beyond about 1 the
+  noise mostly produces saturated, random commands. A smaller `entropy_coef` or squashing the
+  actions with tanh should help the next run.
+- **Video:** `videos/chase/rl-video-step-0.mp4` shows learned vs learned. The chaser drives the
+  runner to a wall, and the runner drifts out.
+
+**Next ideas** (none run yet):
+- legs that turn faster (see "Failure: the legs don't turn");
+- lower entropy, or tanh actions;
+- train against an opponent pool sampled from older checkpoints, against cycling.
