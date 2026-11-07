@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Training outputs (TensorBoard logs, ~5 MB checkpoints) and rendered videos
+runs/
+videos/

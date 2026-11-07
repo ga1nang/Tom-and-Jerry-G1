@@ -60,4 +60,4 @@ Non-obvious details that matter when changing things:
 - **`log_keys`** in `train_walk.py` must exactly match keys in mjlab's `extras["log"]` (e.g. `Episode_Termination/fell_over`). Keys that don't match are silently skipped. `Episode_Reward/<term>` is added automatically for every term with a nonzero weight (`MjlabEnv.reward_terms`). Only `print_keys` are shown on the console line.
 - **Eval fall counting** relies on play mode having no time limit, so every `terminated` is a fall. `eval_walk.py` hardcodes `0.02` s per step for the video length. That equals the task's `step_dt` (timestep 0.005 × decimation 4), so update it if the task's timing changes.
 
-`runs/` (TensorBoard logs plus about 5 MB per checkpoint) and `videos/` are **not** in `.gitignore`, so don't commit them by accident.
+`runs/` (TensorBoard logs plus about 5 MB per checkpoint) and `videos/` are git-ignored. Results worth keeping go in `EXPERIMENTS.md`.
