@@ -38,6 +38,11 @@ env = MjlabEnv(
     fell_over_weight=args.fell_over, pose_running_scale=args.pose_running_scale,
   ),
 )
+print_keys = (
+  "Episode_Termination/fell_over",
+  "Episode_Reward/track_linear_velocity",
+  "Curriculum/command_vel/lin_vel_x_max",
+)
 train(
   env,
   iterations=args.iterations,
@@ -45,7 +50,7 @@ train(
   device=device,
   log_dir=args.log_dir,
   resume=args.resume,
-  log_keys=("Episode_Termination/fell_over", "Episode_Reward/track_linear_velocity",
-            "Curriculum/command_vel/lin_vel_x_max"),
+  log_keys=print_keys + tuple(f"Episode_Reward/{name}" for name in env.reward_terms),
+  print_keys=print_keys,
 )
 env.close()

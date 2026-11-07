@@ -98,6 +98,12 @@ class MjlabEnv:
     self.num_actions = self.env.unwrapped.action_manager.total_action_dim
     self.step_dt = self.env.unwrapped.step_dt
 
+  @property
+  def reward_terms(self):
+    """Names of the reward terms with a nonzero weight (mjlab skips the others)."""
+    rm = self.env.unwrapped.reward_manager
+    return [name for name in rm.active_terms if rm.get_term_cfg(name).weight != 0]
+
   def forward_speed(self):
     """Commanded and actual forward speed (m/s, pelvis frame) of every robot."""
     env = self.env.unwrapped

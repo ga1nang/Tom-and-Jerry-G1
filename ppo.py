@@ -291,7 +291,12 @@ def load_actor_critic(path, device):
   return ac, ckpt
 
 
-def train(env, iterations, cfg=PPOConfig(), device="cpu", log_dir="runs/ppo", resume=None, log_keys=(), seed=0):
+def train(
+  env, iterations, cfg=PPOConfig(), device="cpu", log_dir="runs/ppo", resume=None,
+  log_keys=(), print_keys=None, seed=0,
+):
+  # log_keys: info entries written to TensorBoard. print_keys: the ones also printed (default: all).
+  print_keys = log_keys if print_keys is None else print_keys
   torch.manual_seed(seed)
   os.makedirs(log_dir, exist_ok=True)
   obs = env.reset()
@@ -348,7 +353,7 @@ def train(env, iterations, cfg=PPOConfig(), device="cpu", log_dir="runs/ppo", re
           writer.add_scalar(k, v, it)
     done_its = it - start + 1
     eta = (time.time() - t_start) / done_its * (iterations - done_its)
-    extra = " | ".join(f"{k.split('/')[-1]} {row[k]:.3f}" for k in log_keys if k in row)
+    extra = " | ".join(f"{k.split('/')[-1]} {row[k]:.3f}" for k in print_keys if k in row)
     print(
       f"it {it:5d} | return {row['mean_return']:8.2f} | ep len {row['mean_episode_length']:6.1f} | "
       f"std {row['action_std']:.2f} | lr {state['lr']:.1e} | {extra} | "
