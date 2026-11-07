@@ -796,6 +796,38 @@ turning: commanded 0.00 rad/s | achieved 0.01 rad/s | mean error 0.23 rad/s
 - **Game:** `Game/chaser_win`, `Game/runner_win`, `Game/runner_out` and the other outcomes,
   plus `Game/length_s`. The game's `mean_return` is about 0 by construction.
 
+### Recording and exporting videos
+
+Both eval scripts record an MP4 with `--video FOLDER`, and print its path at the end.
+
+```bash
+# the legs: one robot, 640 × 480, --seconds long (default 20)
+uv run python eval_walk.py --checkpoint runs/g1_turn/model_4349.pt --speed 5 --seconds 12 --video videos/sprint5
+# the game: 960 × 720, --game_s long (default 20). A game that ends is followed by a new one.
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --video videos/game                       # behind the chaser
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --video videos/game_top --camera overhead  # whole arena
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain --game_s 40 --video videos/terrain_40s --camera overhead
+```
+
+- **Where the file goes:** `FOLDER/rl-video-step-0.mp4`. The name is always the same, so a new
+  run into the same folder replaces the old video. Use a new folder for each video you want
+  to keep.
+- **`videos/` isn't tracked by git.**
+
+To share or trim a video, convert it with ffmpeg:
+
+```bash
+# smaller MP4 that plays on phones and in browsers
+ffmpeg -i videos/game/rl-video-step-0.mp4 -c:v libx264 -crf 28 -preset slow -pix_fmt yuv420p game_small.mp4
+# keep only seconds 5 to 15
+ffmpeg -ss 5 -t 10 -i videos/game/rl-video-step-0.mp4 -c:v libx264 -crf 23 -pix_fmt yuv420p clip.mp4
+# a GIF, the way the ones in docs/ were made (12 s, 10 fps, 480 px wide)
+ffmpeg -t 12 -i videos/game_top/rl-video-step-0.mp4 -vf "fps=10,scale=480:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=64:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" game.gif
+```
+
+The overhead camera doesn't move, so its GIFs stay small (1-2 MB for 15 s). The chaser camera
+redraws the whole floor every frame, so keep those clips short.
+
 ## Known issues and next ideas
 
 - **The legs turn slowly.** They reach about 0.2 rad/s of a 0.7 rad/s command. This is the
