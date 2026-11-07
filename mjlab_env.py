@@ -35,6 +35,17 @@ def speed_shortfall(env):
   return (target - progress).clamp(min=0.0)
 
 
+def yaw_error(env):
+  """How far (rad/s) each robot's turning speed is from the commanded one.
+
+  mjlab's track_angular_velocity also counts the torso's roll and pitch wobble, which is
+  large when running, so its exp() pays ~nothing at speed whether the robot turns or not.
+  This penalty only looks at the yaw rate and grows linearly, so turning always pays.
+  """
+  command = env.command_manager.get_command("twist")[:, 2]
+  return (command - env.scene["robot"].data.root_link_ang_vel_b[:, 2]).abs()
+
+
 def set_speed_stages(cfg, stage_iters, steps_per_iter):
   """Speed curriculum: commands up to 2 m/s from iteration A, up to 3 m/s from iteration B.
 
@@ -91,16 +102,19 @@ def set_external_commands(cfg):
 
 def override_rewards(
   cfg, air_time=None, action_rate=None, fell_over_weight=None, pose_running_scale=None,
-  speed_shortfall_weight=None,
+  speed_shortfall_weight=None, yaw_error_weight=None,
 ):
   """Change reward terms before the env is built. None keeps mjlab's setting.
 
   Weights are multiplied by step_dt (0.02 s), like every mjlab reward:
   fell_over_weight=-200 costs 4 per fall; speed_shortfall_weight=-1 costs 1 per
-  second per m/s of missing speed.
+  second per m/s of missing speed; yaw_error_weight=-1 costs 1 per second per rad/s
+  of turning error.
   """
   if speed_shortfall_weight is not None:
     cfg.rewards["speed_shortfall"] = RewardTermCfg(func=speed_shortfall, weight=speed_shortfall_weight)
+  if yaw_error_weight is not None:
+    cfg.rewards["yaw_error"] = RewardTermCfg(func=yaw_error, weight=yaw_error_weight)
   if air_time is not None:
     cfg.rewards["air_time"].weight = air_time  # rewards each foot in the air for 0.05-0.5 s
   if action_rate is not None:

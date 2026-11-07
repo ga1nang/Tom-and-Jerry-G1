@@ -42,8 +42,11 @@ p.add_argument("--pose_running_scale", type=float, default=None,
 p.add_argument("--speed_shortfall", type=float, default=None,
                help="weight of a penalty per m/s slower than the command, e.g. -1 "
                     "(stops the policy from standing still when told to run fast)")
+p.add_argument("--yaw_error", type=float, default=None,
+               help="weight of a penalty per rad/s of turning error, e.g. -1 "
+                    "(mjlab's turning reward pays ~nothing while running, so policies stop turning)")
 args = p.parse_args()
-for flag in ("fell_over", "speed_shortfall"):
+for flag in ("fell_over", "speed_shortfall", "yaw_error"):
   if getattr(args, flag) is not None and getattr(args, flag) > 0:
     p.error(f"--{flag} is a penalty weight and must be <= 0")
 
@@ -61,7 +64,7 @@ env = MjlabEnv(
   rewards=dict(
     air_time=args.air_time, action_rate=args.action_rate,
     fell_over_weight=args.fell_over, pose_running_scale=args.pose_running_scale,
-    speed_shortfall_weight=args.speed_shortfall,
+    speed_shortfall_weight=args.speed_shortfall, yaw_error_weight=args.yaw_error,
   ),
 )
 print_keys = (
