@@ -61,3 +61,5 @@ Non-obvious details that matter when changing things:
 - **Eval fall counting** relies on play mode having no time limit, so every `terminated` is a fall. `eval_walk.py` hardcodes `0.02` s per step for the video length. That equals the task's `step_dt` (timestep 0.005 × decimation 4), so update it if the task's timing changes.
 
 `runs/` (TensorBoard logs plus about 5 MB per checkpoint) and `videos/` are git-ignored. Results worth keeping go in `EXPERIMENTS.md`.
+
+`README.md` is the shareable overview: the training story, the game, a step-by-step guide and the command reference. Its GIFs live in `docs/`. It quotes numbers from `EXPERIMENTS.md`, so update both together. It also lists every file with its line count.
