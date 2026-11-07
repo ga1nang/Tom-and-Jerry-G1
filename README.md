@@ -28,6 +28,9 @@ took about 5.6 hours of training.
 - **A two-player zero-sum Markov game.** Two G1s play runner vs chaser on top of the frozen
   running policy. One network learns both roles by self-play, and beats hand-written players
   on both sides.
+- **A terrain arena.** An optional patchwork of grass, mud and rocky cells (`--terrain`), each
+  with its own grip, softness and speed cap. The current policies can't see the terrain, and
+  when they play on it, the rocks decide most games.
 
 ## Contents
 
@@ -42,6 +45,7 @@ took about 5.6 hours of training.
   - [Trap 1: standing still when told to sprint](#trap-1-standing-still-when-told-to-sprint)
   - [Trap 2: the legs stop turning](#trap-2-the-legs-stop-turning)
 - [The tag game](#the-tag-game)
+  - [Terrain arena: grass, mud and rocks](#terrain-arena-grass-mud-and-rocks-evaluation-only)
 - [Step-by-step training guide](#step-by-step-training-guide)
 - [Command reference](#command-reference)
 - [Known issues and next ideas](#known-issues-and-next-ideas)
@@ -52,12 +56,14 @@ took about 5.6 hours of training.
 | file | lines | what it does |
 |---|---|---|
 | [`ppo.py`](ppo.py) | 368 | PPO for any vectorized environment: networks, rollouts, GAE, the update, the training loop, checkpoints |
-| [`mjlab_env.py`](mjlab_env.py) | 234 | `MjlabEnv`: wraps mjlab's environment in the interface `ppo.py` expects; speed curricula, extra reward terms, fixed commands, video |
+| [`mjlab_env.py`](mjlab_env.py) | 238 | `MjlabEnv`: wraps mjlab's environment in the interface `ppo.py` expects; speed curricula, extra reward terms, fixed commands, video |
 | [`train_walk.py`](train_walk.py) | 85 | Trains the locomotion policy ("the legs") |
 | [`eval_walk.py`](eval_walk.py) | 72 | Counts falls, measures achieved vs commanded speed and turning, records a video |
-| [`chase_env.py`](chase_env.py) | 280 | `ChaseEnv`: the runner vs chaser game on top of frozen legs, plus scripted players |
+| [`chase_env.py`](chase_env.py) | 312 | `ChaseEnv`: the runner vs chaser game on top of frozen legs, plus scripted players |
 | [`train_chase.py`](train_chase.py) | 44 | Trains the game policy (both roles, one network) |
-| [`eval_chase.py`](eval_chase.py) | 67 | Plays games (learned or scripted on either side), prints who wins and how, records a video |
+| [`eval_chase.py`](eval_chase.py) | 84 | Plays games (learned or scripted on either side), prints who wins and how, records a video |
+| [`terrain.py`](terrain.py) | 205 | `TerrainArena`: the optional grass / mud / rocky patchwork arena for the game (`--terrain`) |
+| [`eval_terrain.py`](eval_terrain.py) | 93 | The legs alone on each terrain type: falls, speed, turning, how far the feet sink |
 | [`EXPERIMENTS.md`](EXPERIMENTS.md) | | The lab notebook: every run, its flags, the evaluation numbers, and what went wrong |
 | [`CLAUDE.md`](CLAUDE.md) | | Notes for AI coding assistants. They're also a good list of the non-obvious details for humans. |
 | `docs/` | | The GIFs in this README |
@@ -94,6 +100,7 @@ uv run python eval_walk.py --checkpoint runs/g1_turn/model_4349.pt --speed 5 --v
 uv run python eval_chase.py --checkpoint runs/chase/model_499.pt
 uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --video videos/chase                       # camera behind the chaser
 uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --video videos/chase_top --camera overhead  # whole arena from above
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain --video videos/terrain --camera overhead  # on grass / mud / rocks
 
 # Training curves
 uv run tensorboard --logdir runs
@@ -356,6 +363,50 @@ Training took 500 iterations, 85 minutes (10.2 s per iteration, 1.3 GB of GPU me
 
 Game settings are flags: `--arena`, `--catch_radius`, `--game_s` (a longer game) and
 `--shaping`.
+
+### Terrain arena: grass, mud and rocks (evaluation only)
+
+![The game on the patchwork arena, seen from above](docs/terrain.gif)
+
+*Grey: normal ground. Green: grass. Brown: mud. Sand with dark boxes: rocky. Every game draws a
+new layout. The first game ends in a catch. In the second, a robot runs into a rocky cell and
+trips.*
+
+`--terrain` turns the arena into a 5 × 5 patchwork of 4 m cells:
+- 8 normal, 6 grass, 6 mud and 5 rocky cells (32/24/24/20%);
+- no two side-by-side cells of the same type;
+- a new random layout every game.
+
+Each terrain type changes the physics, and also caps the forward command as a game rule:
+
+| terrain | grip | softness | extra | speed cap |
+|---|---|---|---|---|
+| normal | as on the flat arena | none | | 5 m/s |
+| grass | 0.5 | feet sink 0.4 cm | | 4 m/s |
+| mud | 0.4 | feet sink 1 cm | drag pulls the robot back | 2 m/s |
+| rocky | as normal | none | 5 solid rocks per cell, 8-30 cm tall | 3 m/s |
+
+Nothing was retrained. These are the current legs and game policy, and neither can see the
+terrain:
+- **Grass and mud are survivable at their speed caps.** In mud at 5 m/s, though, 84% of robots
+  fall.
+- **Rocks decide the game.** The blind legs trip over rocks at any speed (80-91% of robots
+  running through a rocky lane fall).
+- In the game, 136-200 of the falls in each match-up happened on rocky cells, against at most
+  5 anywhere else. Games rarely last the full 20 s.
+
+The fix would be to give the game policy the terrain around it and retrain it with
+`--terrain`. `EXPERIMENTS.md` has all the numbers, plus three MuJoCo Warp pitfalls hit while
+building this:
+- the feet's contact priority;
+- box tiles tripping robots at their seams;
+- world-fixed geoms that can't move per world.
+
+```bash
+uv run python eval_terrain.py                                                   # the legs on each terrain
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain      # the game on terrain
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain --video videos/terrain --camera overhead
+```
 
 ## Step-by-step training guide
 
@@ -727,6 +778,7 @@ turning: commanded 0.00 rad/s | achieved 0.01 rad/s | mean error 0.23 rad/s
 | `--catch_radius` | 0.8 | pelvis distance that counts as a catch (m) |
 | `--game_s` | 20 | the runner wins after this many seconds |
 | `--shaping` | 1.0 | chaser reward per metre closed (the runner gets the opposite) |
+| `--terrain` | off | the grass / mud / rocky patchwork arena, with a new layout every game |
 | `--num_games` | 2048 (train), 256 (eval) | games at once, 2 robots each |
 | `--iterations`, `--log_dir`, `--resume` | 500, `runs/chase` | training only |
 | `--checkpoint` | | eval: the game policy |
@@ -756,6 +808,11 @@ turning: commanded 0.00 rad/s | achieved 0.01 rad/s | mean error 0.23 rad/s
   `pursue`, -5.7 vs -14.5. Turning it into proper potential-based shaping (discounted, and
   refunded when the game ends) should cut the runner-out rate. Not tried yet.
 - **Self-play cycles.** Training against a pool of older checkpoints should stabilize it.
+- **Nothing can see the terrain.** On the `--terrain` arena, the legs, the game policy and
+  the scripted players are all blind to it, and rocks trip most robots. Next steps:
+  - terrain inputs for the game policy (the cells around it and the nearest rocks), then
+    retraining with `--terrain`;
+  - scripted players that avoid rocky cells.
 
 ## References
 

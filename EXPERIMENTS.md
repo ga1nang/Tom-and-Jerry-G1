@@ -232,3 +232,102 @@ exactly -10.
 - train against an opponent pool sampled from older checkpoints, against cycling;
 - potential-based shaping (above), to stop rewarding the runner for leaving the arena far
   from the chaser.
+
+## Terrain arena (evaluation only): grass, mud and rocks (`--terrain`)
+
+`terrain.py` turns the arena into a 5 × 5 patchwork of 4 m cells: 8 normal, 6 grass, 6 mud and
+5 rocky cells (32/24/24/20%). Every game draws a new layout, with no two side-by-side cells of
+the same type. Nothing was trained for this: the legs are `g1_turn/model_4349` and the game
+policy is `chase/model_499`, which can't see the terrain (its 23 inputs are unchanged).
+
+| terrain | grip | softness (standing, feet sink) | extra | forward speed cap (game rule) |
+|---|---|---|---|---|
+| normal | the robot's own foot grip (0.3-1.2, as on the flat arena) | none | | 5 m/s |
+| grass | 0.5 | 0.4 cm | | 4 m/s |
+| mud | 0.4 | 1.0 cm | drag on the pelvis, 0.5/s × mass × velocity | 2 m/s |
+| rocky | own foot grip | none | 5 solid rocks per cell: 0.3-0.8 m wide, 8-30 cm tall | 3 m/s |
+
+**How it's built, and three things that went wrong on the way:**
+- **The ground's grip was ignored at first.** The G1's foot geoms have contact priority 1, so
+  their own friction wins over the ground's. The ground now has priority 2. Normal ground
+  copies each robot's own foot friction, so it behaves exactly like the flat arena.
+- **Box tiles tripped the robots at the seams.** At first every cell was a box geom with its
+  own grip and softness. Starting from standing at 5 m/s for 3.2 s (128 robots × 2 runs),
+  falls were:
+  - plain plane: 8%;
+  - one big box: 11%;
+  - 4 m tiles: 16%.
+
+  Now each world's plane takes the grip and softness of the cell under its robot, every 0.02 s
+  (each world has only one robot). The colored tiles are visual only.
+- **Rocks didn't move.** MuJoCo Warp computes the position of geoms fixed to the world only
+  once, when the data is created (`mujoco_warp/_src/smooth.py`), so writing a per-world
+  `geom_pos` did nothing. The robots walked through a "wall" of rocks.
+  - The rocks are now mocap bodies, moved through `data.mocap_pos`.
+  - Their per-world `body_pos` is set too, because a world reset puts mocap bodies back there.
+  - After the fix, a low wall of rocks trips 100% of the robots at 1 m/s.
+
+**Calibrating mud** (32 robots per variant). Speed after the first second, then the share
+that fell:
+
+| mud variant | 2 m/s | 3 m/s | 5 m/s |
+|---|---|---|---|
+| grip 0.3, hard, no drag | 2.03, 0% | 2.98, 0% | 1.88, **100%** |
+| own grip, hard, drag 1.0/s | 1.48, 0% | 2.11, 0% | 2.92, 9% |
+| grip 0.3, soft, drag 1.0/s (first try) | 1.50, 0% | 1.84, 38% | 0.00, 100% |
+| **grip 0.4, soft, drag 0.5/s (chosen)** | **1.78, 0%** | **2.58, 0%** | **2.94, 84%** |
+
+Low grip is what makes mud deadly at speed, and drag alone mostly slows the robot down. The
+chosen mud is safe at its 2 m/s cap and dangerous if a robot runs into it fast.
+
+**The legs alone** (`eval_terrain.py`). 64 robots per terrain, each running straight across a
+whole arena of that type, with no speed caps. The rocky lanes have the same rock density as a
+rocky cell. Each cell gives the speed (or turn rate) and the share that fell:
+
+| commanded | normal | grass | mud | rocky |
+|---|---|---|---|---|
+| 1 m/s | 0.99, 0% | 1.03, 0% | 0.85, 0% | 0.96, **86%** |
+| 3 m/s | 3.03, 0% | 3.06, 0% | 2.58, 0% | 2.93, **91%** |
+| 5 m/s | 4.77, 3% | 4.60, 0% | 3.01, **84%** | 4.32, **80%** |
+| 3 m/s + turn 0.7 rad/s | 0.21 rad/s, 0% | 0.22, 0% | 0.20, 0% | 0.16, 75% |
+
+Grass and mud are fine at their speed caps. **The legs are blind, so they trip over rocks at
+any speed.**
+
+**The game on terrain** (256 games each; percentages are outcomes):
+
+| chaser vs runner | arena | caught | time up | runner fell | chaser fell | runner out | chaser out |
+|---|---|---|---|---|---|---|---|
+| `pursue` vs `flee` | flat | 20-27 | 71-77 | 1.6 | 1.2 | 0.0 | 0.0 |
+| `pursue` vs `flee` | terrain | 16.0 | 7.4 | **48.4** | 28.1 | 0.0 | 0.0 |
+| learned vs `flee` | terrain | 41.0 | 1.6 | 33.2 | 22.7 | 0.0 | 1.6 |
+| `pursue` vs learned | terrain | 1.2 | 11.3 | 43.0 | 39.1 | 5.5 | 0.0 |
+| learned vs learned | terrain | 16.4 | 1.6 | 42.6 | 26.6 | 12.5 | 0.4 |
+
+The flat row is three runs of the same command (evaluations aren't seeded), to show the
+run-to-run spread. The recorded flat result was 27.7 / 68.0.
+
+- **Rocks decide the game.** Between 136 and 200 of the falls in each match-up happened on a
+  rocky cell, against at most 5 on normal, grass or mud. Robots spend only 10-15% of their time
+  on rocky cells, because games there end fast.
+- **The speed caps work as intended.** Grass and mud cost speed, but almost never a fall.
+- **Nothing here can see the terrain.** The scripted players, the game policy and the legs are
+  all blind to it, so "time up" wins nearly vanish: few games last 20 s without someone
+  tripping.
+
+Commands:
+
+```bash
+uv run python eval_terrain.py
+uv run python eval_chase.py --runner flee --chaser pursue --terrain
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain                 # also --runner flee / --chaser pursue
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain --video videos/terrain --camera overhead
+```
+
+**Next ideas** (none run yet):
+- Give the game policy the terrain: the cell types around it and the nearest rocks. Then
+  retrain it with `--terrain`, so it learns to avoid rocky cells, or to herd its opponent into
+  them.
+- Make the scripted players avoid rocky cells, so they stay a fair yardstick.
+- Legs that can see. mjlab's rough-terrain task has a height scan, but that changes the legs'
+  inputs, so they'd have to be retrained.

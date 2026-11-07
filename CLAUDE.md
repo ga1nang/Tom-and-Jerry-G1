@@ -22,6 +22,8 @@ uv run python eval_walk.py --checkpoint runs/g1_walk/model_1499.pt --turn 0.7   
 uv run python train_walk.py --speed_stages 0:4 300:5 --fell_over -200 --pose_running_scale 1.5 --speed_shortfall -1 --yaw_error -1  # speed curriculum + reward overrides (see --help)
 uv run python train_chase.py --legs runs/g1_turn/model_4349.pt                   # runner vs chaser game on frozen legs -> runs/chase
 uv run python eval_chase.py --runner flee --chaser pursue                         # scripted baselines; --checkpoint for the learned policy, --video DIR (--camera chaser|overhead)
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain        # the game on the grass/mud/rocky patchwork (terrain.py)
+uv run python eval_terrain.py                                                     # the legs alone on each terrain type: falls, speed, turning, sinking
 uv run tensorboard --logdir runs
 uv run list-envs                                           # list mjlab task IDs usable with --task
 ```
@@ -36,6 +38,7 @@ There are three layers, and each one only talks to the layer next to it:
 - **`mjlab_env.py`** (`MjlabEnv`) adapts mjlab's `ManagerBasedRlEnv` to that interface. It picks the `"actor"`/`"critic"` observation groups and passes `extras["log"]` as `info`. `play=True` loads the task's evaluation config (no pushes, no observation noise, effectively infinite episode length). With `video_dir` set, it wraps the env in mjlab's `VideoRecorder`.
 - **`train_walk.py` / `eval_walk.py`** are thin CLI scripts that connect the two. The default task is `Mjlab-Velocity-Flat-Unitree-G1`. Its config (rewards, terminations, observations) lives in mjlab under `.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/`.
 - **`chase_env.py` (`ChaseEnv`)** is a zero-sum runner vs chaser game, built on top of `MjlabEnv`. It has the same `reset`/`step` interface, so `train_chase.py` uses `ppo.train` unchanged. A frozen locomotion checkpoint (`--legs`) turns velocity commands into joint actions. The game policy outputs a command (3 numbers, mapped to the legs' training range) every 0.1 s.
+- **`terrain.py` (`TerrainArena`)** is the optional `--terrain` arena: a 5 × 5 patchwork of normal, grass, mud and rocky cells, a new layout per game, with per-terrain grip, softness, mud drag, solid rocks and a forward speed cap. `MjlabEnv(spec_fn=..., expand_fields=...)` lets it add geometry before mjlab compiles the scene and make model fields per-world. `eval_terrain.py` tests the legs alone on each type.
 
 Non-obvious details that matter when changing things:
 
@@ -57,6 +60,12 @@ Non-obvious details that matter when changing things:
   - Game checkpoints don't record which `--legs` were used; `args.jsonl` does.
   - The video overlay works by adding `ChaseEnv` itself to mjlab's `manager_visualizers`, which mjlab draws on every rendered frame.
   - The default `--camera chaser` moves mjlab's private `_offline_renderer._cam` from `debug_vis` each frame, so a camera change shows up one frame late. If an mjlab upgrade breaks it, use `--camera overhead`.
+- **Terrain (`terrain.py`) and MuJoCo Warp.** Each of these was found the hard way (`EXPERIMENTS.md`, "Terrain arena"):
+  - **Per-world fields.** Only fields expanded with `sim.expand_model_fields` can differ between worlds; everything else is one shared copy. The two worlds of a game must get the same layout.
+  - **Contact priority decides whose grip counts.** The G1's foot geoms have priority 1, so the ground's friction and softness are ignored unless the ground's priority is higher. The plane gets priority 2, and on normal ground it copies each robot's own (randomized) foot friction.
+  - **Don't build the ground from separate box tiles.** Feet catch on the seams: falls at 5 m/s went from 8% to 16%. Instead, each world's plane takes the grip and softness of the cell under its robot every 0.02 s (`step_effects`), which works because each world holds one robot. The colored tiles are visual only.
+  - **Geoms fixed to the world never move per world.** MuJoCo Warp computes their positions once, when the data is created, so per-world `geom_pos` does nothing. Movable obstacles must be mocap bodies (`data.mocap_pos`). Also set their per-world `body_pos`/`body_quat`: a world reset puts mocap bodies back there.
+  - **`--terrain` keeps the 23-number game input,** so `chase/model_499` loads but is blind to the terrain. Rocks are not in mjlab's `terrain` body, so foot-contact sensors don't count them as ground.
 - **`log_keys`** in `train_walk.py` must exactly match keys in mjlab's `extras["log"]` (e.g. `Episode_Termination/fell_over`). Keys that don't match are silently skipped. `Episode_Reward/<term>` is added automatically for every term with a nonzero weight (`MjlabEnv.reward_terms`). Only `print_keys` are shown on the console line.
 - **Eval fall counting** relies on play mode having no time limit, so every `terminated` is a fall. `eval_walk.py` hardcodes `0.02` s per step for the video length. That equals the task's `step_dt` (timestep 0.005 × decimation 4), so update it if the task's timing changes.
 
