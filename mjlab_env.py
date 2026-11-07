@@ -37,6 +37,22 @@ def set_speed_stages(cfg, stage_iters, steps_per_iter):
   ]
 
 
+def set_custom_speed_stages(cfg, speed_stages, steps_per_iter):
+  """Speed curriculum beyond mjlab's 3 m/s: [(iteration, vmax), ...].
+
+  From each iteration of this run on, forward commands go up to vmax m/s, backward
+  up to min(2, vmax) m/s, and turning up to 0.7 rad/s (as in mjlab's last stage).
+  Counted and applied like set_speed_stages.
+  """
+  iters = [it for it, _ in speed_stages]
+  if iters[0] != 0 or iters != sorted(iters):
+    raise ValueError(f"speed_stages must start at iteration 0 and be in order, got {speed_stages}")
+  cfg.curriculum["command_vel"].params["velocity_stages"] = [
+    {"step": it * steps_per_iter, "lin_vel_x": (-min(2.0, vmax), vmax), "ang_vel_z": (-0.7, 0.7)}
+    for it, vmax in speed_stages
+  ]
+
+
 def set_fixed_speed(cfg, speed):
   """Every robot is told the same thing: go straight ahead at `speed` m/s."""
   twist = cfg.commands["twist"]
@@ -75,13 +91,15 @@ def override_rewards(cfg, air_time=None, action_rate=None, fell_over_weight=None
 class MjlabEnv:
   def __init__(
     self, task, num_envs, device, play=False, video_dir=None, video_steps=1000,
-    stage_iters=None, steps_per_iter=24, fixed_speed=None, rewards=None,
+    stage_iters=None, speed_stages=None, steps_per_iter=24, fixed_speed=None, rewards=None,
   ):
     # play=True: evaluation version of the task (no pushes, no sensor noise, no time limit).
     cfg = load_env_cfg(task, play=play)
     cfg.scene.num_envs = num_envs
     if stage_iters is not None:
       set_speed_stages(cfg, stage_iters, steps_per_iter)
+    if speed_stages is not None:
+      set_custom_speed_stages(cfg, speed_stages, steps_per_iter)
     if fixed_speed is not None:
       set_fixed_speed(cfg, fixed_speed)
     if rewards:

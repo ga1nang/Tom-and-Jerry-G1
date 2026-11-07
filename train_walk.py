@@ -7,15 +7,26 @@ import torch
 from mjlab_env import MjlabEnv
 from ppo import PPOConfig, train
 
+
+def speed_stage(text):
+  """Parse "300:5" into (300, 5.0): from iteration 300, forward commands up to 5 m/s."""
+  it, vmax = text.split(":")
+  return int(it), float(vmax)
+
+
 p = argparse.ArgumentParser()
 p.add_argument("--task", default="Mjlab-Velocity-Flat-Unitree-G1")
 p.add_argument("--num_envs", type=int, default=4096)
 p.add_argument("--iterations", type=int, default=1500)
 p.add_argument("--log_dir", default="runs/g1_walk")
 p.add_argument("--resume", default=None, help="checkpoint to continue from")
-p.add_argument("--stage_iters", type=int, nargs=2, metavar=("A", "B"), default=None,
-               help="commands up to 2 m/s from iteration A and 3 m/s from iteration B of this run "
-                    "(mjlab: 5000 and 10000)")
+# Speed curriculum, counted from the start of this run (also after --resume).
+stages = p.add_mutually_exclusive_group()
+stages.add_argument("--stage_iters", type=int, nargs=2, metavar=("A", "B"), default=None,
+                    help="commands up to 2 m/s from iteration A and 3 m/s from iteration B "
+                         "(mjlab: 5000 and 10000)")
+stages.add_argument("--speed_stages", type=speed_stage, nargs="+", metavar="ITER:VMAX", default=None,
+                    help="commands up to VMAX m/s from iteration ITER, e.g. 0:4 300:5 (first ITER must be 0)")
 # Reward weights. Every mjlab reward is multiplied by step_dt = 0.02 s.
 p.add_argument("--air_time", type=float, default=0.0, help="weight of the feet air-time reward")
 p.add_argument("--action_rate", type=float, default=None, help="weight of action_rate_l2 (mjlab: -0.1)")
@@ -32,7 +43,7 @@ print("device:", device)
 cfg = PPOConfig()
 env = MjlabEnv(
   args.task, args.num_envs, device,
-  stage_iters=args.stage_iters, steps_per_iter=cfg.num_steps,
+  stage_iters=args.stage_iters, speed_stages=args.speed_stages, steps_per_iter=cfg.num_steps,
   rewards=dict(
     air_time=args.air_time, action_rate=args.action_rate,
     fell_over_weight=args.fell_over, pose_running_scale=args.pose_running_scale,
