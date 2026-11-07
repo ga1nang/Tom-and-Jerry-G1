@@ -1,6 +1,9 @@
 """Train the G1 to walk with our own PPO (ppo.py), using mjlab only as the simulator."""
 
 import argparse
+import json
+import os
+import time
 
 import torch
 
@@ -39,6 +42,11 @@ p.add_argument("--pose_running_scale", type=float, default=None,
 args = p.parse_args()
 if args.fell_over is not None and args.fell_over > 0:
   p.error("--fell_over is a penalty weight and must be <= 0")
+
+# Checkpoints don't store these flags, so keep one line per run (resumes included).
+os.makedirs(args.log_dir, exist_ok=True)
+with open(os.path.join(args.log_dir, "args.jsonl"), "a") as f:
+  f.write(json.dumps({"time": time.strftime("%Y-%m-%d %H:%M:%S"), **vars(args)}) + "\n")
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 print("device:", device)
