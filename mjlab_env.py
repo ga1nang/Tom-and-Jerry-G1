@@ -6,8 +6,18 @@ import torch
 
 import mjlab.tasks  # noqa: F401  (registers the tasks)
 from mjlab.envs import ManagerBasedRlEnv
+from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.utils.wrappers import VideoRecorder
+
+# Joints that move the most when running: longer leg strides, bigger arm swing.
+RUNNING_JOINTS = ("hip_pitch", "knee", "shoulder", "elbow")
+
+
+def fell_over(env):
+  """1 for robots that the "fell_over" termination ended this step, else 0."""
+  # Safe to read inside a reward: mjlab computes terminations before rewards.
+  return env.termination_manager.get_term("fell_over").float()
 
 
 def set_speed_stages(cfg, stage_iters, steps_per_iter):
@@ -42,10 +52,30 @@ def set_fixed_speed(cfg, speed):
   cfg.curriculum.pop("command_vel", None)  # it would overwrite the ranges above
 
 
+def override_rewards(cfg, air_time=None, action_rate=None, fell_over_weight=None, pose_running_scale=None):
+  """Change reward terms before the env is built. None keeps mjlab's setting.
+
+  Weights are multiplied by step_dt (0.02 s), like every mjlab reward:
+  fell_over_weight=-200 costs 4 per fall.
+  """
+  if air_time is not None:
+    cfg.rewards["air_time"].weight = air_time  # rewards each foot in the air for 0.05-0.5 s
+  if action_rate is not None:
+    cfg.rewards["action_rate_l2"].weight = action_rate
+  if fell_over_weight is not None:
+    cfg.rewards["fall_penalty"] = RewardTermCfg(func=fell_over, weight=fell_over_weight)
+  if pose_running_scale is not None:
+    # The pose reward uses std_running once |command| >= 1.5 (larger std = more freedom).
+    std = cfg.rewards["pose"].params["std_running"]
+    for pattern in std:
+      if any(joint in pattern for joint in RUNNING_JOINTS):
+        std[pattern] *= pose_running_scale
+
+
 class MjlabEnv:
   def __init__(
     self, task, num_envs, device, play=False, video_dir=None, video_steps=1000,
-    stage_iters=None, steps_per_iter=24, fixed_speed=None,
+    stage_iters=None, steps_per_iter=24, fixed_speed=None, rewards=None,
   ):
     # play=True: evaluation version of the task (no pushes, no sensor noise, no time limit).
     cfg = load_env_cfg(task, play=play)
@@ -54,6 +84,8 @@ class MjlabEnv:
       set_speed_stages(cfg, stage_iters, steps_per_iter)
     if fixed_speed is not None:
       set_fixed_speed(cfg, fixed_speed)
+    if rewards:
+      override_rewards(cfg, **rewards)
     if video_dir:
       cfg.viewer.width, cfg.viewer.height = 640, 480
     self.env = ManagerBasedRlEnv(cfg=cfg, device=device, render_mode="rgb_array" if video_dir else None)

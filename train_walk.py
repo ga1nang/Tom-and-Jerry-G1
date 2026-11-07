@@ -16,7 +16,16 @@ p.add_argument("--resume", default=None, help="checkpoint to continue from")
 p.add_argument("--stage_iters", type=int, nargs=2, metavar=("A", "B"), default=None,
                help="commands up to 2 m/s from iteration A and 3 m/s from iteration B of this run "
                     "(mjlab: 5000 and 10000)")
+# Reward weights. Every mjlab reward is multiplied by step_dt = 0.02 s.
+p.add_argument("--air_time", type=float, default=0.0, help="weight of the feet air-time reward")
+p.add_argument("--action_rate", type=float, default=None, help="weight of action_rate_l2 (mjlab: -0.1)")
+p.add_argument("--fell_over", type=float, default=None,
+               help="weight of an extra penalty when a robot falls, e.g. -200 (= -4 per fall)")
+p.add_argument("--pose_running_scale", type=float, default=None,
+               help="multiply the running pose std of hip_pitch, knees and arms, e.g. 1.5")
 args = p.parse_args()
+if args.fell_over is not None and args.fell_over > 0:
+  p.error("--fell_over is a penalty weight and must be <= 0")
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 print("device:", device)
@@ -24,6 +33,10 @@ cfg = PPOConfig()
 env = MjlabEnv(
   args.task, args.num_envs, device,
   stage_iters=args.stage_iters, steps_per_iter=cfg.num_steps,
+  rewards=dict(
+    air_time=args.air_time, action_rate=args.action_rate,
+    fell_over_weight=args.fell_over, pose_running_scale=args.pose_running_scale,
+  ),
 )
 train(
   env,
