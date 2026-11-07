@@ -11,6 +11,7 @@ the first 2 s after every spawn skipped. "Falls" means falls per robot-minute.
 | `g1_walk` | scratch | 0-1499 | defaults, 4096 envs | 0.93 m/s @ 1, 1.77 @ 2, 2.26 @ 3 (59 falls @ 3). mjlab's speed stages start at iteration 5000, so this run never got commands above 1 m/s. |
 | `g1_run` | `g1_walk/model_1499` | 1500-2999 | `--stage_iters 0 500 --fell_over -200 --pose_running_scale 1.5` | 2.98 @ 3, 3.89 @ 4 (0 falls), 4.41 @ 5 (4.2 falls), even though training commands stopped at 3 m/s |
 | `g1_sprint` | `g1_run/model_2999` | 3000-3999 | `--num_envs 8192 --num_minibatches 8 --speed_stages 0:4 300:5 --fell_over -200 --pose_running_scale 1.5` | 3.00 @ 3 (0 falls), **0.35 @ 4, 0.00 @ 5 (0 falls): stands still** (see below) |
+| `g1_sprint2` | `g1_run/model_2999` | 3000-3999 | same as `g1_sprint` + `--speed_shortfall -1` | **5.05 @ 5, 4.08 @ 4, 3.04 @ 3**, 0 falls at every speed and with random commands |
 
 ## Failure: the policy stands still when told to run at 4-5 m/s (`g1_sprint`)
 
@@ -54,8 +55,9 @@ W = -1 at 5 m/s, the totals flip: the running policy scores 0.72 (shortfall -0.5
 standing one -1.14 (shortfall -5.00). Running still comes out about 1 per second ahead after
 counting its falls.
 
-**Next run (not run yet):** repeat `g1_sprint` with the penalty, starting again from the policy
-that still runs:
+**Result (`g1_sprint2`):** fixed. This repeats `g1_sprint` with only the penalty added, starting
+again from the policy that still runs. It reaches 5.05 m/s at 5, 4.08 at 4 and 3.04 at 3, with
+0 falls at every speed and with random commands.
 
 ```bash
 uv run python train_walk.py --resume runs/g1_run/model_2999.pt --log_dir runs/g1_sprint2 \
