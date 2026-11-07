@@ -39,9 +39,13 @@ p.add_argument("--fell_over", type=float, default=None,
                help="weight of an extra penalty when a robot falls, e.g. -200 (= -4 per fall)")
 p.add_argument("--pose_running_scale", type=float, default=None,
                help="multiply the running pose std of hip_pitch, knees and arms, e.g. 1.5")
+p.add_argument("--speed_shortfall", type=float, default=None,
+               help="weight of a penalty per m/s slower than the command, e.g. -1 "
+                    "(stops the policy from standing still when told to run fast)")
 args = p.parse_args()
-if args.fell_over is not None and args.fell_over > 0:
-  p.error("--fell_over is a penalty weight and must be <= 0")
+for flag in ("fell_over", "speed_shortfall"):
+  if getattr(args, flag) is not None and getattr(args, flag) > 0:
+    p.error(f"--{flag} is a penalty weight and must be <= 0")
 
 # Checkpoints don't store these flags, so keep one line per run (resumes included).
 os.makedirs(args.log_dir, exist_ok=True)
@@ -57,6 +61,7 @@ env = MjlabEnv(
   rewards=dict(
     air_time=args.air_time, action_rate=args.action_rate,
     fell_over_weight=args.fell_over, pose_running_scale=args.pose_running_scale,
+    speed_shortfall_weight=args.speed_shortfall,
   ),
 )
 print_keys = (

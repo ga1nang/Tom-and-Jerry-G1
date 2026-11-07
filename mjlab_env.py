@@ -20,6 +20,21 @@ def fell_over(env):
   return env.termination_manager.get_term("fell_over").float()
 
 
+def speed_shortfall(env):
+  """How many m/s slower than commanded each robot moves along the command direction.
+
+  Standing still when told to run at 5 m/s scores 5; running at 4.4 m/s scores 0.6;
+  going faster than commanded scores 0. Unlike track_linear_velocity, whose
+  exp(-error²/0.25) is ~0 for anything more than ~1 m/s off, this keeps paying for
+  every extra m/s, so standing still is never the safe choice.
+  """
+  command = env.command_manager.get_command("twist")[:, :2]
+  velocity = env.scene["robot"].data.root_link_lin_vel_b[:, :2]
+  target = command.norm(dim=1)
+  progress = (velocity * command).sum(dim=1) / target.clamp(min=1e-6)  # 0 for a zero command
+  return (target - progress).clamp(min=0.0)
+
+
 def set_speed_stages(cfg, stage_iters, steps_per_iter):
   """Speed curriculum: commands up to 2 m/s from iteration A, up to 3 m/s from iteration B.
 
@@ -68,12 +83,18 @@ def set_fixed_speed(cfg, speed):
   cfg.curriculum.pop("command_vel", None)  # it would overwrite the ranges above
 
 
-def override_rewards(cfg, air_time=None, action_rate=None, fell_over_weight=None, pose_running_scale=None):
+def override_rewards(
+  cfg, air_time=None, action_rate=None, fell_over_weight=None, pose_running_scale=None,
+  speed_shortfall_weight=None,
+):
   """Change reward terms before the env is built. None keeps mjlab's setting.
 
   Weights are multiplied by step_dt (0.02 s), like every mjlab reward:
-  fell_over_weight=-200 costs 4 per fall.
+  fell_over_weight=-200 costs 4 per fall; speed_shortfall_weight=-1 costs 1 per
+  second per m/s of missing speed.
   """
+  if speed_shortfall_weight is not None:
+    cfg.rewards["speed_shortfall"] = RewardTermCfg(func=speed_shortfall, weight=speed_shortfall_weight)
   if air_time is not None:
     cfg.rewards["air_time"].weight = air_time  # rewards each foot in the air for 0.05-0.5 s
   if action_rate is not None:
