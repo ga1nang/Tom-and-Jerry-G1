@@ -12,6 +12,7 @@ the first 2 s after every spawn skipped. "Falls" means falls per robot-minute.
 | `g1_run` | `g1_walk/model_1499` | 1500-2999 | `--stage_iters 0 500 --fell_over -200 --pose_running_scale 1.5` | 2.98 @ 3, 3.89 @ 4 (0 falls), 4.41 @ 5 (4.2 falls), even though training commands stopped at 3 m/s |
 | `g1_sprint` | `g1_run/model_2999` | 3000-3999 | `--num_envs 8192 --num_minibatches 8 --speed_stages 0:4 300:5 --fell_over -200 --pose_running_scale 1.5` | 3.00 @ 3 (0 falls), **0.35 @ 4, 0.00 @ 5 (0 falls): stands still** (see below) |
 | `g1_sprint2` | `g1_run/model_2999` | 3000-3999 | same as `g1_sprint` + `--speed_shortfall -1` | **5.05 @ 5, 4.08 @ 4, 3.04 @ 3**, 0 falls at every speed and with random commands. **It can't turn** (see below). |
+| `g1_turn` | `g1_sprint2/model_3999` | 4000-4499 | `--num_envs 8192 --num_minibatches 8 --speed_stages 0:5 --fell_over -200 --pose_running_scale 1.5 --speed_shortfall -1 --yaw_error -1` | Turns a little: 0.12-0.22 rad/s for a 0.7 command. **It collapsed after about iteration 4400**: `model_4499` falls 254 times per robot-minute at 5 m/s. Best checkpoint: `model_4349` (4.96 @ 5, 0 falls). |
 
 ## Failure: the policy stands still when told to run at 4-5 m/s (`g1_sprint`)
 
@@ -105,8 +106,29 @@ every bit of turning pays. At 5 m/s with no turn commanded, the running gait's y
 already measures 0.42 rad/s, so with W = -1 the penalty also discourages pelvis twist and may
 cost a little top speed.
 
-**Next run (not run yet):** fine-tune `g1_sprint2` with the penalty added and nothing else
-changed:
+**Result (`g1_turn`): only partly fixed, and the run collapsed at the end.** It fine-tuned
+`g1_sprint2` with the penalty added and nothing else changed (command below). 32-64 robots per
+check:
+
+| checkpoint | 5 m/s straight | 4 m/s straight | turn in place (0.7) | 3 m/s + turn 0.7 |
+|---|---|---|---|---|
+| `g1_sprint2/3999` | 5.05, 0 falls | 4.08, 0 falls | 0.00 rad/s | 0.04 rad/s |
+| `g1_turn/4049` | 5.01, 0 falls | | | 0.11 rad/s |
+| `g1_turn/4249` | 4.92, 0.7 falls | | | 0.20 rad/s |
+| `g1_turn/4349` (best) | 4.96, 0 falls | 4.01, 0 falls | 0.12 rad/s | 0.22 rad/s |
+| `g1_turn/4399` | 4.99, 10.5 falls | | | |
+| `g1_turn/4499` (last) | **254 falls** (falls within 0.3 s of spawning) | **185 falls** | 0.17 rad/s | 0.22 rad/s |
+
+- Turning improved, but only to about a third of the command. A robot turning at 0.22 rad/s
+  while running at 3 m/s needs a circle 27 m across, bigger than the 20 m game arena.
+- Training falls (`Episode_Termination/fell_over`) went from about 1.5 to 6 between iterations
+  4400 and 4499, and episodes got shorter. Meanwhile KL (about 0.015), learning rate and
+  action std stayed normal. So the reward pushed the policy there; the optimizer didn't blow up.
+  The likely cause, not verified: turning at 0.7 rad/s while running at 4-5 m/s means about
+  3.5 m/s² of sideways acceleration, and the penalty keeps pushing for it.
+- Random commands and forward-speed tracking are fine at `model_4349`: 0 falls.
+
+Command used:
 
 ```bash
 uv run python train_walk.py --resume runs/g1_sprint2/model_3999.pt --log_dir runs/g1_turn \
@@ -114,10 +136,10 @@ uv run python train_walk.py --resume runs/g1_sprint2/model_3999.pt --log_dir run
   --speed_stages 0:5 --fell_over -200 --pose_running_scale 1.5 --speed_shortfall -1 --yaw_error -1
 ```
 
-Check it with `eval_walk.py --turn 0.7`, `--speed 3 --turn 0.7`, `--speed 5`, and random
-commands.
-
-**Lesson:** check every command axis (`--speed`, `--turn`), not just the one being pushed.
+**Lessons:**
+- Check every command axis (`--speed`, `--turn`), not just the one being pushed.
+- Check a few checkpoints, not only the last one. The run can go bad near the end, and only
+  the evaluation catches it.
 
 ## Game: runner vs chaser (`chase_env.py`)
 
@@ -136,9 +158,10 @@ Training speed: 10.4 s per iteration at 2048 games (4096 robots), 1.3 GB of GPU 
 
 **Blocked on turning.** With `g1_sprint2` legs, no robot can steer. Scripted `flee` vs
 `pursue` came out 92% runner wins, 8% catches and 0 falls, but that measures robots that can't
-turn, so it's not a real baseline. Re-measure it, then train, once the legs turn:
+turn, so it's not a real baseline. `g1_turn/model_4349` turns, but only at about 0.2 rad/s.
+Re-measure the baseline, then train, once the legs turn well:
 
 ```bash
-uv run python eval_chase.py --runner flee --chaser pursue --legs runs/g1_turn/model_4499.pt
-uv run python train_chase.py --legs runs/g1_turn/model_4499.pt --log_dir runs/chase
+uv run python eval_chase.py --runner flee --chaser pursue --legs runs/g1_turn/model_4349.pt
+uv run python train_chase.py --legs runs/g1_turn/model_4349.pt --log_dir runs/chase
 ```
