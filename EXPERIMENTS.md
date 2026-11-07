@@ -192,7 +192,43 @@ each game:
 - **Video:** `videos/chase/rl-video-step-0.mp4` shows learned vs learned. The chaser drives the
   runner to a wall, and the runner drifts out.
 
+**The shaping reward makes leaving the arena cheaper than being caught.**
+- Each decision, the runner's shaping pays +1 per metre it opens and -1 per metre the chaser
+  closes. Over a game, that adds up to (distance at the end − distance at the start).
+- On the decision where a game ends, the shaping is skipped (`torch.where(ended, 0.0, ...)`
+  in `ChaseEnv.step`). So a runner that loses keeps all the distance it gained.
+
+Measured with `model_499`, 512 games each, with the distance at the last decision before
+each game ended:
+
+| chaser | outcome | share | distance at the end | runner's shaping | runner's total |
+|---|---|---|---|---|---|
+| `pursue` | caught | 2.1% | 1.0 m | -4.5 | **-14.5** |
+| `pursue` | runner out | 12.1% | **9.4 m** | +4.3 | **-5.7** |
+| learned | caught | 38.1% | 0.9 m | -4.2 | -14.2 |
+| learned | runner out | 37.9% | 4.1 m | -1.1 | -11.1 |
+
+- **Against `pursue`, leaving the arena scores 9 points better than being caught.** The runner
+  leaves with the chaser 9.4 m behind, so nothing forces it out. It runs straight away,
+  collecting shaping on every decision, and doesn't slow down for the wall.
+- **Discounting turns the shaping into a "stay far away" reward.** With γ = 0.995, the
+  discounted shaping is a time-weighted average of the distance over the game, minus the
+  starting distance.
+
+**Fix, not tried yet: proper potential-based shaping.** Discount the new distance with γ, and
+refund the remaining distance when the game ends:
+
+```python
+chaser_reward = shaping * torch.where(ended, self.dist, self.dist - gamma * dist)
+```
+
+Every outcome's total shaping then equals the starting distance. The shaping still guides
+learning but no longer changes which outcome is better, so leaving and being caught both cost
+exactly -10.
+
 **Next ideas** (none run yet):
 - legs that turn faster (see "Failure: the legs don't turn");
 - lower entropy, or tanh actions;
-- train against an opponent pool sampled from older checkpoints, against cycling.
+- train against an opponent pool sampled from older checkpoints, against cycling;
+- potential-based shaping (above), to stop rewarding the runner for leaving the arena far
+  from the chaser.
