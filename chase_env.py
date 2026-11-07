@@ -27,6 +27,7 @@ from mjlab.utils.lab_api.math import wrap_to_pi
 from mjlab.viewer.viewer_config import ViewerConfig
 from mjlab_env import MjlabEnv
 from ppo import load_actor_critic
+from terrain import FIELDS, ROCKY, TerrainArena
 
 TASK = "Mjlab-Velocity-Flat-Unitree-G1"
 # Commands the sprint policy was trained on (forward -2..5 m/s, sideways ±1 m/s, turning ±0.7 rad/s).
@@ -47,11 +48,13 @@ def add_game_args(p):
   p.add_argument("--catch_radius", type=float, default=0.8, help="pelvis distance that counts as a catch (m)")
   p.add_argument("--game_s", type=float, default=20.0, help="the runner wins after this many seconds")
   p.add_argument("--shaping", type=float, default=1.0, help="chaser reward per metre closed (runner: the opposite)")
+  p.add_argument("--terrain", action="store_true",
+                 help="patchwork arena: normal, grass, mud and rocky cells, a new layout every game (terrain.py)")
 
 
 def game_kwargs(args):
   return dict(legs_ckpt=args.legs, arena=args.arena, catch_radius=args.catch_radius,
-              game_s=args.game_s, shaping=args.shaping)
+              game_s=args.game_s, shaping=args.shaping, terrain=args.terrain)
 
 
 def rotate(v, heading):
@@ -63,7 +66,7 @@ def rotate(v, heading):
 class ChaseEnv:
   def __init__(
     self, num_games, device, legs_ckpt, arena=20.0, catch_radius=0.8, game_s=20.0,
-    decision_s=0.1, shaping=1.0, start_dist=(3.0, 8.0), video_dir=None, camera="chaser",
+    decision_s=0.1, shaping=1.0, start_dist=(3.0, 8.0), video_dir=None, camera="chaser", terrain=False,
   ):
     self.G = num_games
     self.num_envs = 2 * num_games  # agents, as ppo.py sees them
@@ -85,8 +88,15 @@ class ChaseEnv:
                     width=960, height=720, distance=arena, lookat=(0.0, 0.0, 0.0))
       if camera == "overhead":
         viewer.update(distance=arena * 1.45, elevation=-70.0)
+    # terrain=True: grass / mud / rocky patches (terrain.py). Their per-world model fields are
+    # expanded so every game can have its own layout.
+    self.terrain = TerrainArena(arena, device) if terrain else None
     self.mj = MjlabEnv(TASK, self.num_envs, device, play=True, external_commands=True,
-                       video_dir=video_dir, video_steps=int(game_s / 0.02), viewer=viewer)
+                       video_dir=video_dir, video_steps=int(game_s / 0.02), viewer=viewer,
+                       spec_fn=self.terrain.spec_fn if terrain else None,
+                       expand_fields=FIELDS if terrain else ())
+    if terrain:
+      self.terrain.bind(self.mj)
     if video_dir:
       # mjlab calls debug_vis() of everything in this dict when it renders a frame.
       self.mj.env.unwrapped.manager_visualizers["chase"] = self
@@ -109,6 +119,7 @@ class ChaseEnv:
     # Result of the games that ended in the last step(): index into OUTCOMES, -1 = still playing.
     self.outcome = torch.full((num_games,), -1, dtype=torch.long, device=device)
     self.length_s = torch.zeros(num_games, device=device)
+    self.terrain_under = None  # terrain type under every robot at the last decision (terrain only)
 
   # ------------------------------------------------------------------------- #
   # Game state
@@ -119,14 +130,29 @@ class ChaseEnv:
   def _new_games(self, games):
     """Start new games: runner somewhere inside the arena, chaser 3-8 m away, random headings."""
     n, G, dev = len(games), self.G, self.device
-    runner_xy = (torch.rand(n, 2, device=dev) * 2 - 1) * (self.half - 3.0)
-    angle = torch.rand(n, device=dev) * 2 * math.pi
-    dist = torch.empty(n, device=dev).uniform_(*self.start_dist)
-    offset = dist[:, None] * torch.stack([torch.cos(angle), torch.sin(angle)], dim=1)
+    worlds = torch.cat([games, games + G])
+    # With terrain: a new layout, the same in both worlds of a game, and 16 candidate spots
+    # per robot, of which the first one outside the rocky cells is used.
+    tries = 16 if self.terrain else 1
+    runner_xy = (torch.rand(n, tries, 2, device=dev) * 2 - 1) * (self.half - 3.0)
+    angle = torch.rand(n, tries, device=dev) * 2 * math.pi
+    dist = torch.empty(n, tries, device=dev).uniform_(*self.start_dist)
+    offset = dist[..., None] * torch.stack([torch.cos(angle), torch.sin(angle)], dim=-1)
     # Keep the chaser at least 1 m from the walls (so it may start a bit closer than 3 m).
     chaser_xy = (runner_xy + offset).clamp(-(self.half - 1.0), self.half - 1.0)
+    pick = torch.zeros(n, dtype=torch.long, device=dev)
+    if self.terrain:
+      cells, rock_xy, rock_yaw = self.terrain.random_layouts(n)
+      self.terrain.set_cells(worlds, cells.repeat(2, 1))
+      self.terrain.place_rocks(worlds, rock_xy.repeat(2, 1, 1), rock_yaw.repeat(2, 1))
+      ok = torch.ones(n, tries, dtype=torch.bool, device=dev)
+      for xy in (runner_xy, chaser_xy):
+        types = self.terrain.type_at(games.repeat_interleave(tries), xy.reshape(-1, 2)).reshape(n, tries)
+        ok &= types != ROCKY
+      pick = ok.int().argmax(dim=1)  # first spot where neither robot is on rocks (0 if none)
+    rows = torch.arange(n, device=dev)
+    runner_xy, chaser_xy = runner_xy[rows, pick], chaser_xy[rows, pick]
     yaw = torch.rand(2 * n, device=dev) * 2 * math.pi - math.pi
-    worlds = torch.cat([games, games + G])
     self.mj.place_robots(worlds, torch.cat([runner_xy, chaser_xy]), yaw)
     self.steps[games] = 0
     self.command[worlds] = 0.0
@@ -166,10 +192,16 @@ class ChaseEnv:
     G = self.G
     a = actions.clamp(-1.0, 1.0)
     self.command = self.cmd_low + (a + 1) / 2 * (self.cmd_high - self.cmd_low)
+    if self.terrain:
+      # Game rule: the terrain under a robot caps its forward speed (e.g. 2 m/s in mud).
+      self.terrain_under = self.terrain.under_robots()
+      self.command[:, 0] = torch.minimum(self.command[:, 0], self.terrain.speed_cap(self.terrain_under))
     legs_obs = self.mj.set_command(self.command)
 
     outcome = torch.full((G,), -1, dtype=torch.long, device=self.device)
     for _ in range(self.substeps):
+      if self.terrain:
+        self.terrain.step_effects()
       with torch.no_grad():
         legs_obs, _, _, fell, _, _ = self.mj.step(self.legs.act_deterministic(legs_obs))
       self.steps += 1
