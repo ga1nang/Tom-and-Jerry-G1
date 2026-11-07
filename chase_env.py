@@ -63,7 +63,7 @@ def rotate(v, heading):
 class ChaseEnv:
   def __init__(
     self, num_games, device, legs_ckpt, arena=20.0, catch_radius=0.8, game_s=20.0,
-    decision_s=0.1, shaping=1.0, start_dist=(3.0, 8.0), video_dir=None,
+    decision_s=0.1, shaping=1.0, start_dist=(3.0, 8.0), video_dir=None, camera="chaser",
   ):
     self.G = num_games
     self.num_envs = 2 * num_games  # agents, as ppo.py sees them
@@ -73,12 +73,18 @@ class ChaseEnv:
     self.catch_radius = catch_radius
     self.shaping = shaping
     self.start_dist = start_dist
+    self.camera = camera
 
-    # Video: one game (worlds 0 and 1) seen from a fixed camera above the arena.
+    # Video of game 0 (use num_games=1). camera="chaser": a free camera that debug_vis()
+    # moves every frame to sit behind the chaser, looking at the runner.
+    # camera="overhead": fixed, above the arena. The chaser's world is the "primary" one,
+    # so mjlab draws its command arrows; the runner's world is drawn as an extra.
     viewer = None
     if video_dir:
-      viewer = dict(origin_type=ViewerConfig.OriginType.WORLD, lookat=(0.0, 0.0, 0.0),
-                    distance=arena * 1.45, elevation=-70.0, max_extra_envs=1, width=960, height=720)
+      viewer = dict(origin_type=ViewerConfig.OriginType.WORLD, env_idx=num_games, max_extra_envs=1,
+                    width=960, height=720, distance=arena, lookat=(0.0, 0.0, 0.0))
+      if camera == "overhead":
+        viewer.update(distance=arena * 1.45, elevation=-70.0)
     self.mj = MjlabEnv(TASK, self.num_envs, device, play=True, external_commands=True,
                        video_dir=video_dir, video_steps=int(game_s / 0.02), viewer=viewer)
     if video_dir:
@@ -247,6 +253,28 @@ class ChaseEnv:
     pos = self._pos().cpu().numpy()
     for xy, radius, color in ((pos[0], 0.4, (0.1, 0.4, 1.0, 0.8)), (pos[self.G], self.catch_radius, (1.0, 0.1, 0.1, 0.6))):
       vis.add_cylinder(np.array([xy[0], xy[1], 0.0]), np.array([xy[0], xy[1], 0.02]), radius, color)
+    if self.camera == "chaser":
+      self._follow_chaser(pos[self.G], pos[0])
+
+  def _follow_chaser(self, chaser, runner, elevation=-35.0):
+    """Put the video camera behind the chaser, looking toward the runner, and zoom out with the
+    gap so the runner stays in view. It takes effect from the next frame (mjlab draws the
+    overlay after placing the camera), and moves smoothly, except at the very first frame."""
+    # mjlab has no public way to move the offscreen camera, so we set it directly.
+    cam = self.mj.env.unwrapped._offline_renderer._cam
+    gap = runner - chaser
+    dist = float(np.hypot(gap[0], gap[1]))
+    # Look at a point 40% of the way to the runner, from 6 m behind the chaser (more when far apart).
+    want_distance = (0.6 * dist + 6.0) / math.cos(math.radians(elevation))
+    want_lookat = np.array([chaser[0] + 0.4 * gap[0], chaser[1] + 0.4 * gap[1], 0.6])
+    # Face the runner; when they nearly touch, the direction jumps around, so keep the old one.
+    want_azimuth = math.degrees(math.atan2(gap[1], gap[0])) if dist > 1.0 else cam.azimuth
+    k = 1.0 if not getattr(self, "_camera_placed", False) else 0.15  # snap the first time
+    self._camera_placed = True
+    cam.elevation = elevation
+    cam.azimuth += k * ((want_azimuth - cam.azimuth + 180.0) % 360.0 - 180.0)  # shortest way round
+    cam.distance += k * (want_distance - cam.distance)
+    cam.lookat[:] = cam.lookat + k * (want_lookat - cam.lookat)
 
   def close(self):
     self.mj.close()

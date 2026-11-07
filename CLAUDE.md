@@ -21,7 +21,7 @@ uv run python eval_walk.py --checkpoint runs/g1_walk/model_1499.pt --speed 2.0  
 uv run python eval_walk.py --checkpoint runs/g1_walk/model_1499.pt --turn 0.7   # turn in place (add --speed to turn while moving)
 uv run python train_walk.py --speed_stages 0:4 300:5 --fell_over -200 --pose_running_scale 1.5 --speed_shortfall -1 --yaw_error -1  # speed curriculum + reward overrides (see --help)
 uv run python train_chase.py --legs runs/g1_turn/model_4349.pt                   # runner vs chaser game on frozen legs -> runs/chase
-uv run python eval_chase.py --runner flee --chaser pursue                         # scripted baselines; --checkpoint for the learned policy, --video DIR
+uv run python eval_chase.py --runner flee --chaser pursue                         # scripted baselines; --checkpoint for the learned policy, --video DIR (--camera chaser|overhead)
 uv run tensorboard --logdir runs
 uv run list-envs                                           # list mjlab task IDs usable with --task
 ```
@@ -56,6 +56,7 @@ Non-obvious details that matter when changing things:
   - One network plays both roles, so the logged `mean_return` is about 0 by construction. Watch the `Game/*` win rates instead.
   - Game checkpoints don't record which `--legs` were used; `args.jsonl` does.
   - The video overlay works by adding `ChaseEnv` itself to mjlab's `manager_visualizers`, which mjlab draws on every rendered frame.
+  - The default `--camera chaser` moves mjlab's private `_offline_renderer._cam` from `debug_vis` each frame, so a camera change shows up one frame late. If an mjlab upgrade breaks it, use `--camera overhead`.
 - **`log_keys`** in `train_walk.py` must exactly match keys in mjlab's `extras["log"]` (e.g. `Episode_Termination/fell_over`). Keys that don't match are silently skipped. `Episode_Reward/<term>` is added automatically for every term with a nonzero weight (`MjlabEnv.reward_terms`). Only `print_keys` are shown on the console line.
 - **Eval fall counting** relies on play mode having no time limit, so every `terminated` is a fall. `eval_walk.py` hardcodes `0.02` s per step for the video length. That equals the task's `step_dt` (timestep 0.005 × decimation 4), so update it if the task's timing changes.
 

@@ -16,6 +16,8 @@ p.add_argument("--chaser", choices=("policy", "pursue"), default="policy")
 p.add_argument("--num_games", type=int, default=256)
 p.add_argument("--sample", action="store_true", help="sample actions instead of using the mean")
 p.add_argument("--video", default=None, help="folder for an mp4 of one game (overhead camera)")
+p.add_argument("--camera", choices=("chaser", "overhead"), default="chaser",
+               help="video view: behind the chaser looking at the runner, or above the whole arena")
 add_game_args(p)
 args = p.parse_args()
 if "policy" in (args.runner, args.chaser) and not args.checkpoint:
@@ -23,7 +25,7 @@ if "policy" in (args.runner, args.chaser) and not args.checkpoint:
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 G = 1 if args.video else args.num_games
-env = ChaseEnv(G, device, video_dir=args.video, **game_kwargs(args))
+env = ChaseEnv(G, device, video_dir=args.video, camera=args.camera, **game_kwargs(args))
 ac = None
 if args.checkpoint:
   ac, _ = load_actor_critic(args.checkpoint, device)
