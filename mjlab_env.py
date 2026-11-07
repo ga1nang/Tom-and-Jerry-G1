@@ -83,6 +83,12 @@ def set_fixed_speed(cfg, speed):
   cfg.curriculum.pop("command_vel", None)  # it would overwrite the ranges above
 
 
+def set_external_commands(cfg):
+  """mjlab never picks or changes the commands; the caller writes them (MjlabEnv.set_command)."""
+  set_fixed_speed(cfg, 0.0)
+  cfg.commands["twist"].resampling_time_range = (1e9, 1e9)  # never draw a new random command
+
+
 def override_rewards(
   cfg, air_time=None, action_rate=None, fell_over_weight=None, pose_running_scale=None,
   speed_shortfall_weight=None,
@@ -113,6 +119,7 @@ class MjlabEnv:
   def __init__(
     self, task, num_envs, device, play=False, video_dir=None, video_steps=1000,
     stage_iters=None, speed_stages=None, steps_per_iter=24, fixed_speed=None, rewards=None,
+    external_commands=False, viewer=None,
   ):
     # play=True: evaluation version of the task (no pushes, no sensor noise, no time limit).
     cfg = load_env_cfg(task, play=play)
@@ -123,10 +130,14 @@ class MjlabEnv:
       set_custom_speed_stages(cfg, speed_stages, steps_per_iter)
     if fixed_speed is not None:
       set_fixed_speed(cfg, fixed_speed)
+    if external_commands:
+      set_external_commands(cfg)
     if rewards:
       override_rewards(cfg, **rewards)
     if video_dir:
       cfg.viewer.width, cfg.viewer.height = 640, 480
+    for key, value in (viewer or {}).items():  # camera settings, e.g. {"distance": 20.0}
+      setattr(cfg.viewer, key, value)
     self.env = ManagerBasedRlEnv(cfg=cfg, device=device, render_mode="rgb_array" if video_dir else None)
     if video_dir:
       self.env = VideoRecorder(
@@ -153,6 +164,42 @@ class MjlabEnv:
   def time_since_reset(self):
     """Seconds since each robot last (re)spawned."""
     return self.env.unwrapped.episode_length_buf * self.step_dt
+
+  @property
+  def robot(self):
+    """mjlab's robot entity: robot.data has positions, velocities, heading, ..."""
+    return self.env.unwrapped.scene["robot"]
+
+  def actor_obs(self):
+    """Recompute the actor observations from the current state (e.g. after a new command)."""
+    return self.env.unwrapped.observation_manager.compute_group("actor")
+
+  def set_command(self, cmd):
+    """Give every robot a new (forward m/s, sideways m/s, turn rad/s) command; returns fresh actor obs.
+
+    Needs external_commands=True, otherwise mjlab overwrites it with its own random commands.
+    """
+    self.env.unwrapped.command_manager.get_term("twist").vel_command_b[:] = cmd
+    return self.actor_obs()
+
+  def place_robots(self, ids, xy, yaw):
+    """Respawn the robots in worlds `ids` standing still at xy (m), facing yaw (rad).
+
+    mjlab respawns them as usual (default joint angles, random spot), then we move them.
+    Returns fresh actor obs for all robots.
+    """
+    env = self.env.unwrapped
+    env.reset(env_ids=ids)
+    pose = torch.zeros(len(ids), 7, device=xy.device)
+    pose[:, :2] = xy
+    pose[:, 2] = self.robot.data.root_link_pos_w[ids, 2]  # keep mjlab's spawn height
+    pose[:, 3] = torch.cos(yaw / 2)  # quaternion (w, x, y, z) of a turn by yaw about the z axis
+    pose[:, 6] = torch.sin(yaw / 2)
+    self.robot.write_root_link_pose_to_sim(pose, env_ids=ids)
+    self.robot.write_root_link_velocity_to_sim(torch.zeros(len(ids), 6, device=xy.device), env_ids=ids)
+    env.sim.forward()  # update body positions from the new pose
+    env.sim.sense()  # and the IMU readings the actor observes
+    return self.actor_obs()
 
   def reset(self):
     obs, _ = self.env.reset()
