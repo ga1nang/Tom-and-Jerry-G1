@@ -207,6 +207,11 @@ class ChaseEnv:
     error = wrap_to_pi(torch.atan2(direction[:, 1], direction[:, 0]) - heading)
     turn = (2.0 * error).clamp(CMD_LOW[2], CMD_HIGH[2])
     forward = speed * torch.cos(error).clamp(min=0.2)  # slow down while facing the wrong way
+    # Distance to the arena edge straight ahead. At most 0.7 rad/s of turning means a turning
+    # circle of radius speed / 0.7, so slow down to speed <= 0.7 * (distance - 1.5 m).
+    pos, heading_vec = self._pos()[ids], torch.stack([torch.cos(heading), torch.sin(heading)], dim=1)
+    ahead = ((self.half - pos * torch.sign(heading_vec)) / heading_vec.abs().clamp(min=1e-6)).min(dim=1).values
+    forward = torch.minimum(forward, (CMD_HIGH[2] * (ahead - 1.5)).clamp(min=0.0))
     cmd = torch.stack([forward, torch.zeros_like(forward), turn], dim=1)
     return 2 * (cmd - self.cmd_low) / (self.cmd_high - self.cmd_low) - 1
 
