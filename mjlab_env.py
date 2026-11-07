@@ -27,16 +27,33 @@ def set_speed_stages(cfg, stage_iters, steps_per_iter):
   ]
 
 
+def set_fixed_speed(cfg, speed):
+  """Every robot is told the same thing: go straight ahead at `speed` m/s."""
+  twist = cfg.commands["twist"]
+  twist.ranges.lin_vel_x = (speed, speed)
+  twist.ranges.lin_vel_y = (0.0, 0.0)
+  twist.ranges.ang_vel_z = (0.0, 0.0)
+  twist.rel_standing_envs = 0.0
+  twist.rel_forward_envs = 0.0  # these robots get abs(speed) clamped to >= 0.3
+  twist.rel_world_envs = 0.0
+  # Heading robots turn toward a random heading by overwriting ang_vel_z.
+  twist.heading_command = False
+  twist.ranges.heading = None  # mjlab rejects a heading range without heading_command
+  cfg.curriculum.pop("command_vel", None)  # it would overwrite the ranges above
+
+
 class MjlabEnv:
   def __init__(
     self, task, num_envs, device, play=False, video_dir=None, video_steps=1000,
-    stage_iters=None, steps_per_iter=24,
+    stage_iters=None, steps_per_iter=24, fixed_speed=None,
   ):
     # play=True: evaluation version of the task (no pushes, no sensor noise, no time limit).
     cfg = load_env_cfg(task, play=play)
     cfg.scene.num_envs = num_envs
     if stage_iters is not None:
       set_speed_stages(cfg, stage_iters, steps_per_iter)
+    if fixed_speed is not None:
+      set_fixed_speed(cfg, fixed_speed)
     if video_dir:
       cfg.viewer.width, cfg.viewer.height = 640, 480
     self.env = ManagerBasedRlEnv(cfg=cfg, device=device, render_mode="rgb_array" if video_dir else None)
@@ -48,6 +65,17 @@ class MjlabEnv:
     self.num_envs = num_envs
     self.num_actions = self.env.unwrapped.action_manager.total_action_dim
     self.step_dt = self.env.unwrapped.step_dt
+
+  def forward_speed(self):
+    """Commanded and actual forward speed (m/s, pelvis frame) of every robot."""
+    env = self.env.unwrapped
+    commanded = env.command_manager.get_command("twist")[:, 0]
+    actual = env.scene["robot"].data.root_link_lin_vel_b[:, 0]
+    return commanded, actual
+
+  def time_since_reset(self):
+    """Seconds since each robot last (re)spawned."""
+    return self.env.unwrapped.episode_length_buf * self.step_dt
 
   def reset(self):
     obs, _ = self.env.reset()
