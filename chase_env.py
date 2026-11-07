@@ -20,6 +20,7 @@ One network plays both roles; an observation tells it which one it is.
 
 import math
 
+import numpy as np
 import torch
 
 from mjlab.utils.lab_api.math import wrap_to_pi
@@ -76,9 +77,12 @@ class ChaseEnv:
     viewer = None
     if video_dir:
       viewer = dict(origin_type=ViewerConfig.OriginType.WORLD, lookat=(0.0, 0.0, 0.0),
-                    distance=arena * 1.1, elevation=-60.0, max_extra_envs=1)
+                    distance=arena * 1.45, elevation=-70.0, max_extra_envs=1, width=960, height=720)
     self.mj = MjlabEnv(TASK, self.num_envs, device, play=True, external_commands=True,
                        video_dir=video_dir, video_steps=int(game_s / 0.02), viewer=viewer)
+    if video_dir:
+      # mjlab calls debug_vis() of everything in this dict when it renders a frame.
+      self.mj.env.unwrapped.manager_visualizers["chase"] = self
     self.substeps = round(decision_s / self.mj.step_dt)  # physics steps per decision
     self.game_steps = round(game_s / self.mj.step_dt)
     self.game_s = game_s
@@ -231,6 +235,17 @@ class ChaseEnv:
     near_wall = (pos[:G].abs() - (self.half - 4.0)).clamp(min=0.0) / 4.0  # 0 far away, 1 at the wall
     direction = away - 2.0 * torch.sign(pos[:G]) * near_wall
     return self._steer(torch.arange(G, device=self.device), direction, CMD_HIGH[0])
+
+  def debug_vis(self, vis):
+    """Video overlay: yellow arena edges, a blue disc under the runner and a red disc
+    (the catch radius) under the chaser of game 0."""
+    h = self.half
+    edges = (((h, 0), (0.05, h)), ((-h, 0), (0.05, h)), ((0, h), (h, 0.05)), ((0, -h), (h, 0.05)))
+    for (x, y), (sx, sy) in edges:
+      vis.add_box(np.array([x, y, 0.01]), np.array([sx, sy, 0.01]), np.eye(3), (1.0, 0.8, 0.0, 1.0))
+    pos = self._pos().cpu().numpy()
+    for xy, radius, color in ((pos[0], 0.4, (0.1, 0.4, 1.0, 0.8)), (pos[self.G], self.catch_radius, (1.0, 0.1, 0.1, 0.6))):
+      vis.add_cylinder(np.array([xy[0], xy[1], 0.0]), np.array([xy[0], xy[1], 0.02]), radius, color)
 
   def close(self):
     self.mj.close()
