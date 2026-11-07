@@ -133,11 +133,13 @@ class MjlabEnv:
   def __init__(
     self, task, num_envs, device, play=False, video_dir=None, video_steps=1000,
     stage_iters=None, speed_stages=None, steps_per_iter=24, fixed_speed=None, rewards=None,
-    external_commands=False, viewer=None, fixed_turn=0.0,
+    external_commands=False, viewer=None, fixed_turn=0.0, spec_fn=None, expand_fields=(),
   ):
     # play=True: evaluation version of the task (no pushes, no sensor noise, no time limit).
     cfg = load_env_cfg(task, play=play)
     cfg.scene.num_envs = num_envs
+    if spec_fn is not None:  # add or change geometry before mjlab compiles the scene
+      cfg.scene.spec_fn = spec_fn
     if stage_iters is not None:
       set_speed_stages(cfg, stage_iters, steps_per_iter)
     if speed_stages is not None:
@@ -153,6 +155,8 @@ class MjlabEnv:
     for key, value in (viewer or {}).items():  # camera settings, e.g. {"distance": 20.0}
       setattr(cfg.viewer, key, value)
     self.env = ManagerBasedRlEnv(cfg=cfg, device=device, render_mode="rgb_array" if video_dir else None)
+    # Model fields that may differ between worlds (e.g. "geom_pos"); all others are shared.
+    self.env.unwrapped.sim.expand_model_fields(tuple(expand_fields))
     if video_dir:
       self.env = VideoRecorder(
         self.env, video_folder=Path(video_dir), step_trigger=lambda s: s == 0,
