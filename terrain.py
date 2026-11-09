@@ -1,7 +1,7 @@
 """A patchwork arena for the runner vs chaser game: normal, grass, mud and rocky ground.
 
 The arena is a 5 x 5 grid of square cells (4 m for the 20 m arena). Every game gets a new
-random layout with 8 normal, 6 grass, 6 mud and 5 rocky cells (32/24/24/20%), and no two
+random layout with 5 normal, 6 grass, 6 mud and 8 rocky cells (20/24/24/32%), and no two
 side-by-side cells of the same type. Each terrain type does two things:
   - physics: grip, softness, drag in mud, solid rocks (table below);
   - a game rule: the forward command is capped while the robot is on it (SPEED_CAP).
@@ -32,7 +32,7 @@ import mujoco
 NORMAL, GRASS, MUD, ROCKY = range(4)
 TERRAINS = ("normal", "grass", "mud", "rocky")
 CELLS = 5  # cells per side
-CELL_COUNTS = (8, 6, 6, 5)  # cells of each type in a layout (sums to CELLS²)
+CELL_COUNTS = (5, 6, 6, 8)  # cells of each type in a layout (sums to CELLS²)
 
 # Per terrain type: friction (None = the robot's own foot friction), contact softness as
 # MuJoCo's solref (time constant s, damping ratio) and solimp (impedance from dmin to dmax
