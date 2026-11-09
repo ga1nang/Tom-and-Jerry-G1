@@ -57,8 +57,21 @@ PARKED = -5.0  # z of rocks that aren't used (buried under the plane, never touc
 FIELDS = ("geom_friction", "geom_solref", "geom_solimp", "geom_rgba", "body_pos", "body_quat")
 
 
-def make_layouts(n, rng):
-  """n random layouts (n, CELLS²) of terrain types, with no two side-by-side cells alike."""
+def no_equal_neighbours(layouts):
+  """For each layout (n, CELLS²): True if no two side-by-side cells have the same type."""
+  g = layouts.reshape(-1, CELLS, CELLS)
+  return ~((g[:, :, 1:] == g[:, :, :-1]).any(axis=(1, 2)) | (g[:, 1:] == g[:, :-1]).any(axis=(1, 2)))
+
+
+def make_layouts(n, rng, swaps=2000):
+  """n random layouts (n, CELLS²) of terrain types, with no two side-by-side cells alike.
+
+  Backtracking fills the grid in reading order, which crowds the most common type into the
+  last rows (rocky: 25% of the first rows, up to 53% of the last). So every layout is then
+  shuffled: swap two random cells, and keep the swap if the layout is still valid. Swaps
+  can be undone just as easily, so after enough of them every valid layout is about
+  equally likely (each cell is then 28-36% rocky).
+  """
   layouts = np.empty((n, CELLS * CELLS), dtype=np.int64)
   for k in range(n):
     grid, left = [-1] * (CELLS * CELLS), list(CELL_COUNTS)
@@ -78,6 +91,14 @@ def make_layouts(n, rng):
 
     assert fill(0)
     layouts[k] = grid
+
+  rows = np.arange(n)
+  for _ in range(swaps):
+    a, b = rng.integers(CELLS * CELLS, size=(2, n))
+    swapped = layouts.copy()
+    swapped[rows, a], swapped[rows, b] = layouts[rows, b], layouts[rows, a]
+    ok = no_equal_neighbours(swapped)
+    layouts[ok] = swapped[ok]
   return layouts
 
 
