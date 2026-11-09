@@ -235,9 +235,10 @@ exactly -10.
 
 ## Terrain arena (evaluation only): grass, mud and rocks (`--terrain`)
 
-`terrain.py` turns the arena into a 5 × 5 patchwork of 4 m cells: 8 normal, 6 grass, 6 mud and
-5 rocky cells (32/24/24/20%). Every game draws a new layout, with no two side-by-side cells of
-the same type. Nothing was trained for this: the legs are `g1_turn/model_4349` and the game
+`terrain.py` turns the arena into a 5 × 5 patchwork of 4 m cells: 5 normal, 6 grass, 6 mud and
+8 rocky cells (20/24/24/32%). Every game draws a new layout, with no two side-by-side cells of
+the same type. The first game results below used 8 normal and 5 rocky cells (32/24/24/20%).
+The rockier layout, the current default, comes at the end of this section. Nothing was trained for this: the legs are `g1_turn/model_4349` and the game
 policy is `chase/model_499`, which can't see the terrain (its 23 inputs are unchanged).
 
 | terrain | grip | softness (standing, feet sink) | extra | forward speed cap (game rule) |
@@ -294,7 +295,8 @@ rocky cell. Each cell gives the speed (or turn rate) and the share that fell:
 Grass and mud are fine at their speed caps. **The legs are blind, so they trip over rocks at
 any speed.**
 
-**The game on terrain** (256 games each; percentages are outcomes):
+**The game on terrain**, first layout: 8 normal and 5 rocky cells (256 games each; percentages
+are outcomes):
 
 | chaser vs runner | arena | caught | time up | runner fell | chaser fell | runner out | chaser out |
 |---|---|---|---|---|---|---|---|
@@ -314,6 +316,55 @@ run-to-run spread. The recorded flat result was 27.7 / 68.0.
 - **Nothing here can see the terrain.** The scripted players, the game policy and the legs are
   all blind to it, so "time up" wins nearly vanish: few games last 20 s without someone
   tripping.
+
+**Rockier layout: 5 normal, 6 grass, 6 mud and 8 rocky cells** (current default, 40 rocks).
+
+**The layout generator was biased.** Backtracking fills the grid in reading order, so the most
+common type ran short of room early and piled up in the last rows. Share of rocky cells per
+grid row, over the 4096 layouts of the bank (row 5 is the strip at y = 6-10 m):
+
+| generator | row 1 | row 2 | row 3 | row 4 | row 5 |
+|---|---|---|---|---|---|
+| backtracking only | 0.25 | 0.25 | 0.28 | 0.37 | 0.45 |
+| backtracking, then 2000 random swaps (now) | 0.33 | 0.31 | 0.32 | 0.31 | 0.33 |
+
+- The first layout had the same bias for normal ground: up to 52% of a last-row cell, against
+  32% overall. So the first game table was played with more normal ground on one side.
+- The fix shuffles each layout: swap two random cells, and keep the swap if the layout is
+  still valid. Every swap can be undone just as easily, so the swaps make all valid layouts
+  about equally likely. Each cell is now 28-36% rocky, slightly more at corners, which have
+  fewer neighbours.
+- The backtracking stays as a varied starting point. Starting all 4096 layouts from one
+  layout still showed it after 4000 swaps (one cell 23% rocky, another 40%).
+
+**The game** (256 games each, same policies as above):
+
+| chaser vs runner | caught | time up | runner fell | chaser fell | runner out | chaser out | falls on rocky / elsewhere |
+|---|---|---|---|---|---|---|---|
+| `pursue` vs `flee` | 11.3 | 1.2 | **50.0** | 37.1 | 0.0 | 0.0 | 216 / 7 |
+| learned vs `flee` | 30.5 | 0.4 | 44.5 | 24.6 | 0.0 | 0.0 | 168 / 9 |
+| `pursue` vs learned | 1.6 | 2.3 | 48.0 | 43.4 | 4.7 | 0.0 | 225 / 9 |
+| learned vs learned | 9.8 | 0.4 | 43.4 | 34.4 | 11.7 | 0.4 | 185 / 14 |
+
+- **More rocks, more falls.** Falls end 69-91% of games, against 56-82% on the first layout.
+  Catches drop by 26-40% (`pursue` vs learned was already near 1%), and "time up" wins almost
+  vanish (at most 2.3%).
+- Robots spend 17-24% of their time on rocky cells, against 10-15% before.
+
+**The legs alone, repeated.** `eval_terrain.py` keeps its rocky lanes at 25 rocks
+(`LANE_ROCKS`, about a rocky cell's density), not the arena's 40. The rocks now have new sizes,
+drawn from the same ranges. Two runs (evaluations aren't seeded, 64 robots per terrain), the
+share that fell:
+
+| commanded | normal | grass | mud | rocky |
+|---|---|---|---|---|
+| 1 m/s | 0%, 0% | 0%, 0% | 0%, 0% | 61%, 72% |
+| 3 m/s | 0%, 0% | 0%, 0% | 0%, 0% | 86%, 94% |
+| 5 m/s | 3%, 11% | 0%, 0% | 75%, 72% | 86%, 84% |
+| 3 m/s + turn 0.7 rad/s | 0%, 0% | 0%, 0% | 0%, 0% | 70%, 81% |
+
+The speeds and turn rates are close to the first table's. Within this run-to-run spread, the legs
+behave as before.
 
 Commands:
 

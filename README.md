@@ -62,8 +62,8 @@ took about 5.6 hours of training.
 | [`chase_env.py`](chase_env.py) | 312 | `ChaseEnv`: the runner vs chaser game on top of frozen legs, plus scripted players |
 | [`train_chase.py`](train_chase.py) | 44 | Trains the game policy (both roles, one network) |
 | [`eval_chase.py`](eval_chase.py) | 84 | Plays games (learned or scripted on either side), prints who wins and how, records a video |
-| [`terrain.py`](terrain.py) | 205 | `TerrainArena`: the optional grass / mud / rocky patchwork arena for the game (`--terrain`) |
-| [`eval_terrain.py`](eval_terrain.py) | 93 | The legs alone on each terrain type: falls, speed, turning, how far the feet sink |
+| [`terrain.py`](terrain.py) | 226 | `TerrainArena`: the optional grass / mud / rocky patchwork arena for the game (`--terrain`) |
+| [`eval_terrain.py`](eval_terrain.py) | 95 | The legs alone on each terrain type: falls, speed, turning, how far the feet sink |
 | [`EXPERIMENTS.md`](EXPERIMENTS.md) | | The lab notebook: every run, its flags, the evaluation numbers, and what went wrong |
 | [`CLAUDE.md`](CLAUDE.md) | | Notes for AI coding assistants. They're also a good list of the non-obvious details for humans. |
 | `docs/` | | The GIFs in this README |
@@ -373,7 +373,7 @@ new layout. The first game ends in a catch. In the second, a robot runs into a r
 trips.*
 
 `--terrain` turns the arena into a 5 × 5 patchwork of 4 m cells:
-- 8 normal, 6 grass, 6 mud and 5 rocky cells (32/24/24/20%);
+- 5 normal, 6 grass, 6 mud and 8 rocky cells (20/24/24/32%);
 - no two side-by-side cells of the same type;
 - a new random layout every game.
 
@@ -390,10 +390,10 @@ Nothing was retrained. These are the current legs and game policy, and neither c
 terrain:
 - **Grass and mud are survivable at their speed caps.** In mud at 5 m/s, though, 84% of robots
   fall.
-- **Rocks decide the game.** The blind legs trip over rocks at any speed (80-91% of robots
+- **Rocks decide the game.** The blind legs trip over rocks at any speed (61-94% of robots
   running through a rocky lane fall).
-- In the game, 136-200 of the falls in each match-up happened on rocky cells, against at most
-  5 anywhere else. Games rarely last the full 20 s.
+- In the game, 168-225 of the falls in each match-up happened on rocky cells, against at most
+  14 anywhere else. Almost no game lasts the full 20 s.
 
 The fix would be to give the game policy the terrain around it and retrain it with
 `--terrain`. `EXPERIMENTS.md` has all the numbers, plus three MuJoCo Warp pitfalls hit while
