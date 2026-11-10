@@ -337,19 +337,56 @@ grid row, over the 4096 layouts of the bank (row 5 is the strip at y = 6-10 m):
 - The backtracking stays as a varied starting point. Starting all 4096 layouts from one
   layout still showed it after 4000 swaps (one cell 23% rocky, another 40%).
 
-**The game** (256 games each, same policies as above):
+**Old vs new layout in the game.** 1024 games per match-up, same policies:
+- **old:** 8 normal and 5 rocky cells, from the biased generator;
+- **new:** 5 normal and 8 rocky cells, shuffled.
 
-| chaser vs runner | caught | time up | runner fell | chaser fell | runner out | chaser out | falls on rocky / elsewhere |
-|---|---|---|---|---|---|---|---|
-| `pursue` vs `flee` | 11.3 | 1.2 | **50.0** | 37.1 | 0.0 | 0.0 | 216 / 7 |
-| learned vs `flee` | 30.5 | 0.4 | 44.5 | 24.6 | 0.0 | 0.0 | 168 / 9 |
-| `pursue` vs learned | 1.6 | 2.3 | 48.0 | 43.4 | 4.7 | 0.0 | 225 / 9 |
-| learned vs learned | 9.8 | 0.4 | 43.4 | 34.4 | 11.7 | 0.4 | 185 / 14 |
+Evaluations aren't seeded; with 1024 games, each figure is within about ±3 points (95%). Draws
+and "chaser out", at most 1.3% each, are left out. "Someone fell" adds up both falls. "Chaser
+wins, any way" adds up the catches, the runner's falls and the runner leaving the arena.
 
-- **More rocks, more falls.** Falls end 69-91% of games, against 56-82% on the first layout.
-  Catches drop by 26-40% (`pursue` vs learned was already near 1%), and "time up" wins almost
-  vanish (at most 2.3%).
-- Robots spend 17-24% of their time on rocky cells, against 10-15% before.
+| chaser vs runner | layout | caught | time up | runner fell | chaser fell | runner out | someone fell | chaser wins, any way |
+|---|---|---|---|---|---|---|---|---|
+| `pursue` vs `flee` | old | 14.5 | 6.6 | 45.6 | 33.0 | 0.1 | 78.6 | 60.2 |
+| | new | 12.0 | 1.6 | 47.2 | 39.2 | 0.1 | **86.4** | 59.3 |
+| learned vs `flee` | old | 44.0 | 2.2 | 31.7 | 20.8 | 0.0 | 52.5 | 75.7 |
+| | new | 31.0 | 0.6 | 40.4 | 27.4 | 0.2 | **67.8** | 71.6 |
+| `pursue` vs learned | old | 1.6 | 11.2 | 42.4 | 35.7 | 9.1 | 78.1 | 53.1 |
+| | new | 1.1 | 3.2 | 45.0 | 45.0 | 5.7 | **90.0** | 51.8 |
+| learned vs learned | old | 16.9 | 1.3 | 41.4 | 27.0 | 13.0 | 68.4 | 71.3 |
+| | new | 10.9 | 0.5 | 48.4 | 31.6 | 8.4 | **80.0** | 67.7 |
+
+- **Falls replace catches and time-ups.** With 8 rocky cells, falls end 68-90% of games,
+  against 53-79% on the old layout.
+  - Catches drop by up to 13 points: the learned chaser against `flee` goes from 44.0 to 31.0.
+  - "Time up" wins drop to at most 3.2%.
+  - Runners leave the arena less often, because more games end in a fall first.
+- **Who wins hardly changes.** The chaser's wins, counting every way of winning, move by at
+  most 4 points. Both robots are equally blind, so the extra rocks trip both sides about as
+  often. Rocks decide more of the games, but they favour neither role.
+- **Robots spend 17-22% of their time on rocky cells, against 11-14% before.** That's about
+  the 8 : 5 ratio of rocky cells, because nobody steers around them.
+- **90-98% of all falls happen on rocky cells,** on both layouts.
+- **The 1024-game runs of the old layout agree with the 256-game table above** within noise,
+  so that table still stands.
+
+**Which change did it?** The rockier layout and the layout fix came together, so all four
+combinations were run (1024 games each). Share of games that ended in a fall:
+
+| chaser vs runner | 5 rocky, biased (old) | 5 rocky, shuffled | 8 rocky, biased | 8 rocky, shuffled (now) |
+|---|---|---|---|---|
+| `pursue` vs `flee` | 78.6 | 76.1 | 84.8 | 86.4 |
+| learned vs `flee` | 52.5 | 48.2 | 68.2 | 67.8 |
+| `pursue` vs learned | 78.1 | 75.2 | 91.5 | 90.0 |
+| learned vs learned | 68.4 | 58.2 | 79.2 | 80.0 |
+
+- **The extra rocky cells explain the difference.** They add 6-22 points of falls with either
+  generator.
+- **The layout fix matters little.** With 8 rocky cells, it moves falls by less than 2 points,
+  which is noise. With 5 rocky cells, it lowered falls by 2.5-10 points, the most for learned vs
+  learned. The cause wasn't checked.
+- To reproduce the old layout, set `CELL_COUNTS = (8, 6, 6, 5)` in `terrain.py` and call
+  `make_layouts(..., swaps=0)`.
 
 **The legs alone, repeated.** `eval_terrain.py` keeps its rocky lanes at 25 rocks
 (`LANE_ROCKS`, about a rocky cell's density), not the arena's 40. The rocks now have new sizes,

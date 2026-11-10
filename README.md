@@ -388,12 +388,30 @@ Each terrain type changes the physics, and also caps the forward command as a ga
 
 Nothing was retrained. These are the current legs and game policy, and neither can see the
 terrain:
-- **Grass and mud are survivable at their speed caps.** In mud at 5 m/s, though, 84% of robots
-  fall.
+- **Grass and mud are survivable at their speed caps.** In mud at 5 m/s, though, 72-84% of
+  robots fall.
 - **Rocks decide the game.** The blind legs trip over rocks at any speed (61-94% of robots
   running through a rocky lane fall).
-- In the game, 168-225 of the falls in each match-up happened on rocky cells, against at most
-  14 anywhere else. Almost no game lasts the full 20 s.
+- In the game, 94-98% of the falls happen on rocky cells. Almost no game lasts the full 20 s.
+
+**Old vs new layout.** The arena first had 8 normal and 5 rocky cells, and the generator
+crowded the most common type into one side of the grid. Now it has 5 normal and 8 rocky cells,
+spread evenly. With the same policies and 1024 games per match-up, the share of games ending
+each way:
+
+| chaser vs runner | caught | time up | someone fell | chaser wins, any way |
+|---|---|---|---|---|
+| `pursue` vs `flee` | 14.5 → 12.0 | 6.6 → 1.6 | 78.6 → 86.4 | 60.2 → 59.3 |
+| learned vs `flee` | 44.0 → 31.0 | 2.2 → 0.6 | 52.5 → 67.8 | 75.7 → 71.6 |
+| `pursue` vs learned | 1.6 → 1.1 | 11.2 → 3.2 | 78.1 → 90.0 | 53.1 → 51.8 |
+| learned vs learned | 16.9 → 10.9 | 1.3 → 0.5 | 68.4 → 80.0 | 71.3 → 67.7 |
+
+- **Falls replace catches and time-ups.** Robots spend 17-22% of their time on rocky cells
+  instead of 11-14%, and that's where they fall.
+- **Who wins hardly changes:** at most 4 points. Both robots are blind, so the rocks trip both
+  sides alike. They decide more games but favour neither role.
+- **The extra rocky cells did it, not the layout fix.** Running all four combinations, the fix
+  alone moves falls by less than 2 points on the 8-rocky layout.
 
 The fix would be to give the game policy the terrain around it and retrain it with
 `--terrain`. `EXPERIMENTS.md` has all the numbers, plus three MuJoCo Warp pitfalls hit while
