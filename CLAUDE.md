@@ -21,6 +21,7 @@ uv run python eval_walk.py --checkpoint runs/g1_walk/model_1499.pt --speed 2.0  
 uv run python eval_walk.py --checkpoint runs/g1_walk/model_1499.pt --turn 0.7   # turn in place (add --speed to turn while moving)
 uv run python train_walk.py --speed_stages 0:4 300:5 --fell_over -200 --pose_running_scale 1.5 --speed_shortfall -1 --yaw_error -1  # speed curriculum + reward overrides (see --help)
 uv run python train_chase.py --legs runs/g1_turn/model_4349.pt                   # runner vs chaser game on frozen legs -> runs/chase
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --max_speed 2                                  # game rule: cap both robots' forward command (m/s)
 uv run python eval_chase.py --runner flee --chaser pursue                         # scripted baselines; --checkpoint for the learned policy, --video DIR (--camera chaser|overhead)
 uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain        # the game on the grass/mud/rocky patchwork (terrain.py)
 uv run python eval_terrain.py                                                     # the legs alone on each terrain type: falls, speed, turning, sinking
@@ -58,6 +59,7 @@ Non-obvious details that matter when changing things:
 - **`ChaseEnv` ghost worlds:** runner i is mjlab world i and chaser i is world G+i, so the two robots never touch, and a catch means their pelvises come within `catch_radius`.
   - Every world uses the same coordinate frame: the arena is centred at (0, 0), and `MjlabEnv.place_robots` writes positions that ignore `env_origins`.
   - mjlab must never change the commands (`external_commands=True`), and `set_command` recomputes the actor observations so the legs see a new command on the same step.
+  - **`--max_speed`** clamps the forward command after the policy's output is mapped to `[CMD_LOW, CMD_HIGH]`, so `chase/model_499` works unchanged. Don't lower `CMD_HIGH[0]` instead: it also scales the command in the observation (`command / cmd_high`) and changes what the policy's outputs mean. The scripted players use `max_speed` as their top speed.
   - The 20 s limit is a game rule, so it's returned as `terminated`, never `truncated`.
   - One network plays both roles, so the logged `mean_return` is about 0 by construction. Watch the `Game/*` win rates instead.
   - Game checkpoints don't record which `--legs` were used; `args.jsonl` does.

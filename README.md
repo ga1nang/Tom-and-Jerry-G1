@@ -63,7 +63,7 @@ took about 5.6 hours of training.
 | [`mjlab_env.py`](mjlab_env.py) | 240 | `MjlabEnv`: wraps mjlab's environment in the interface `ppo.py` expects; speed curricula, extra reward terms, fixed commands, video |
 | [`train_walk.py`](train_walk.py) | 85 | Trains the locomotion policy ("the legs") |
 | [`eval_walk.py`](eval_walk.py) | 72 | Counts falls, measures achieved vs commanded speed and turning, records a video |
-| [`chase_env.py`](chase_env.py) | 338 | `ChaseEnv`: the runner vs chaser game on top of frozen legs, plus scripted players |
+| [`chase_env.py`](chase_env.py) | 342 | `ChaseEnv`: the runner vs chaser game on top of frozen legs, plus scripted players |
 | [`train_chase.py`](train_chase.py) | 44 | Trains the game policy (both roles, one network) |
 | [`eval_chase.py`](eval_chase.py) | 94 | Plays games (learned or scripted on either side), prints who wins and how, records a video |
 | [`terrain.py`](terrain.py) | 236 | `TerrainArena`: the optional grass / mud / rocky patchwork arena for the game (`--terrain`) |
@@ -371,8 +371,20 @@ Training took 500 iterations, 85 minutes (10.2 s per iteration, 1.3 GB of GPU me
 - **Self-play win rates swing a lot during training** (the chaser's win rate moved between 24%
   and 57%). That's normal for self-play, so progress is judged against the scripted players.
 
-Game settings are flags: `--arena`, `--catch_radius`, `--game_s` (a longer game) and
-`--shaping`.
+Game settings are flags: `--arena`, `--catch_radius`, `--game_s` (a longer game), `--max_speed`
+and `--shaping`.
+
+**Speed cap (`--max_speed`).** The game policy's output covers 0-5 m/s forward, which no real G1
+can do (about 2 m/s). `--max_speed V` is a game rule: after the policy's output is mapped to a
+command, the forward speed is clamped to `V` for both robots. It needs no retraining, and the
+scripted players use it as their top speed. Capping at 2 m/s without retraining (128 games,
+`--standup`) takes the runner from 17% to 43% wins, and mean catch time from 8.5 s to 11.4 s.
+The learned runner leaves the arena less (44% → 19.5% of games), but it is still weaker than
+the scripted `flee` (70%). See [`EXPERIMENTS.md`](EXPERIMENTS.md).
+
+```bash
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --max_speed 2 --standup runs/standup/model_11000.pt
+```
 
 ### Terrain arena: grass, mud and rocks (evaluation only)
 
@@ -858,6 +870,7 @@ turning: commanded 0.00 rad/s | achieved 0.01 rad/s | mean error 0.23 rad/s
 | `--legs` | `runs/g1_turn/model_4349.pt` | frozen locomotion checkpoint |
 | `--arena` | 20 | side of the square arena (m) |
 | `--catch_radius` | 0.8 | pelvis distance that counts as a catch (m) |
+| `--max_speed` | 5 | cap on both robots' forward speed command (m/s); the policy's output range is unchanged |
 | `--game_s` | 20 | the runner wins after this many seconds |
 | `--shaping` | 1.0 | chaser reward per metre closed (the runner gets the opposite) |
 | `--terrain` | off | the grass / mud / rocky patchwork arena, with a new layout every game |

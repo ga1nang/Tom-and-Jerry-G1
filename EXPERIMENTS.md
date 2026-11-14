@@ -575,3 +575,40 @@ uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain --sta
 - Train the stand-up policy on the falls that actually happen: face down and on the side,
   among rocks. HoST's port already has a prone task.
 - After a hand-over, run slowly for a moment, or steer away from the rocks, to cut the refalls.
+
+## Speed cap (`--max_speed`)
+
+**Why.** The game lets both robots command up to 5 m/s forward, but a real G1 walks at about
+2 m/s, and the runner lost 83-85% of games. `--max_speed V` clamps the forward command of both
+robots after the policy's output is mapped to a command (a game rule, like the terrain cap), so
+`chase/model_499` runs unchanged. The scripted players use `V` as their top speed.
+
+**Result.** 128 games, 20 m arena, 20 s, `chase/model_499`, no retraining. Win rates count a
+fall or leaving the arena as a loss for that side. With `--standup`
+(`runs/standup/model_11000.pt`):
+
+| setup | max_speed | chaser wins | runner wins | runner leaves arena | mean catch time |
+|---|---|---|---|---|---|
+| policy vs policy | 5 | 83% | 17% | 43.8% | 8.5 s |
+| policy vs policy | 2 | 57% | 43% | 19.5% | 11.4 s |
+| `flee` vs `pursue` | 5 | 18% | 82% | 0% | 7.1 s |
+| `flee` vs `pursue` | 2 | 30% | 70% | 0% | 9.5 s |
+
+Without `--standup` the numbers are within a few points (policy vs policy: runner wins 15% at
+5 m/s and 41% at 2 m/s), because falls are rare (0-0.08 per game).
+
+- Leaving the arena, not falling, is the runner's main loss: the legs turn at about 0.2 rad/s,
+  so a 5 m/s turning circle (about 27 m) doesn't fit in the arena. At 2 m/s it is about 9 m.
+- The learned runner (43%) is still weaker than the scripted `flee` (70%) at 2 m/s. The policy was
+  trained with the 5 m/s range, so it hasn't adapted to the cap.
+
+**Commands:**
+
+```bash
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --standup runs/standup/model_11000.pt --max_speed 2 --num_games 128
+uv run python eval_chase.py --runner flee --chaser pursue --standup runs/standup/model_11000.pt --max_speed 2 --num_games 128
+```
+
+**Next idea** (not run yet): fine-tune with `train_chase.py --resume runs/chase/model_499.pt
+--max_speed 2 --standup runs/standup/model_11000.pt`, so the policy trains under the rules it
+is evaluated with.

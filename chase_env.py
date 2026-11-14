@@ -49,6 +49,8 @@ def add_game_args(p):
   p.add_argument("--legs", default="runs/g1_turn/model_4349.pt", help="frozen locomotion policy")
   p.add_argument("--arena", type=float, default=20.0, help="side of the square arena (m)")
   p.add_argument("--catch_radius", type=float, default=0.8, help="pelvis distance that counts as a catch (m)")
+  p.add_argument("--max_speed", type=float, default=CMD_HIGH[0],
+                 help="game rule: cap on every robot's forward speed command (m/s); the policy still outputs the full range")
   p.add_argument("--game_s", type=float, default=20.0, help="the runner wins after this many seconds")
   p.add_argument("--shaping", type=float, default=1.0, help="chaser reward per metre closed (runner: the opposite)")
   p.add_argument("--terrain", action="store_true",
@@ -62,7 +64,7 @@ def add_game_args(p):
 def game_kwargs(args):
   return dict(legs_ckpt=args.legs, arena=args.arena, catch_radius=args.catch_radius,
               game_s=args.game_s, shaping=args.shaping, terrain=args.terrain,
-              standup_ckpt=args.standup, standup_s=args.standup_s)
+              standup_ckpt=args.standup, standup_s=args.standup_s, max_speed=args.max_speed)
 
 
 def rotate(v, heading):
@@ -75,7 +77,7 @@ class ChaseEnv:
   def __init__(
     self, num_games, device, legs_ckpt, arena=20.0, catch_radius=0.8, game_s=20.0,
     decision_s=0.1, shaping=1.0, start_dist=(3.0, 8.0), video_dir=None, camera="chaser", terrain=False,
-    standup_ckpt=None, standup_s=5.0,
+    standup_ckpt=None, standup_s=5.0, max_speed=CMD_HIGH[0],
   ):
     self.G = num_games
     self.num_envs = 2 * num_games  # agents, as ppo.py sees them
@@ -83,6 +85,7 @@ class ChaseEnv:
     self.device = device
     self.half = arena / 2
     self.catch_radius = catch_radius
+    self.max_speed = max_speed
     self.shaping = shaping
     self.start_dist = start_dist
     self.camera = camera
@@ -208,6 +211,7 @@ class ChaseEnv:
     G = self.G
     a = actions.clamp(-1.0, 1.0)
     self.command = self.cmd_low + (a + 1) / 2 * (self.cmd_high - self.cmd_low)
+    self.command[:, 0] = self.command[:, 0].clamp(max=self.max_speed)  # game rule: speed cap
     if self.terrain:
       # Game rule: the terrain under a robot caps its forward speed (e.g. 2 m/s in mud).
       self.terrain_under = self.terrain.under_robots()
@@ -288,9 +292,9 @@ class ChaseEnv:
     """Chasers: run at full speed to where the runner will be (up to 1 s ahead)."""
     G, pos = self.G, self._pos()
     runner_vel = self.mj.robot.data.root_link_lin_vel_w[:G, :2]
-    lead = ((pos[:G] - pos[G:]).norm(dim=1, keepdim=True) / CMD_HIGH[0]).clamp(max=1.0)
+    lead = ((pos[:G] - pos[G:]).norm(dim=1, keepdim=True) / self.max_speed).clamp(max=1.0)
     target = pos[:G] + runner_vel * lead
-    return self._steer(torch.arange(G, 2 * G, device=self.device), target - pos[G:], CMD_HIGH[0])
+    return self._steer(torch.arange(G, 2 * G, device=self.device), target - pos[G:], self.max_speed)
 
   def flee(self):
     """Runners: run at full speed away from the chaser, pushed back from walls closer than 4 m."""
@@ -299,7 +303,7 @@ class ChaseEnv:
     away = away / away.norm(dim=1, keepdim=True).clamp(min=1e-6)
     near_wall = (pos[:G].abs() - (self.half - 4.0)).clamp(min=0.0) / 4.0  # 0 far away, 1 at the wall
     direction = away - 2.0 * torch.sign(pos[:G]) * near_wall
-    return self._steer(torch.arange(G, device=self.device), direction, CMD_HIGH[0])
+    return self._steer(torch.arange(G, device=self.device), direction, self.max_speed)
 
   def debug_vis(self, vis):
     """Video overlay: yellow arena edges, a blue disc under the runner and a red disc
