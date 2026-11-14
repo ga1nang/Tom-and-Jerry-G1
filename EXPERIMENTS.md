@@ -419,3 +419,159 @@ uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain --vid
 - Make the scripted players avoid rocky cells, so they stay a fair yardstick.
 - Legs that can see. mjlab's rough-terrain task has a height scan, but that changes the legs'
   inputs, so they'd have to be retrained.
+
+## Stand-up after falls (`--standup`)
+
+On the terrain arena, 68-91% of games end with a fall, and a fall ends the game at once. That
+hides everything else, including the question of how long a game should be. `--standup CKPT`
+turns a fall into lost time: a frozen stand-up policy gets the robot up again (`standup.py`),
+and the robot loses only if it isn't standing 5 s after its 0.6 s settle (`--standup_s`).
+Nothing in this project was retrained: the legs are `g1_turn/model_4349` and the game policy is
+`chase/model_499`, with its 23 inputs unchanged.
+
+**The stand-up policy.** `runs/standup/model_11000.pt` is a copy of
+`../HoST/mjlab_port/runs/model_11000.pt`: HoST (Huang et al., RSS 2025) ported to mjlab 1.6.0
+on the same 29-DoF G1, trained 11000 iterations on its `Host-G1-Rocks` task (dropped on its
+back onto rocky ground). Its own evaluation (`scripts/eval.py` there, 300 robots; success =
+pelvis above 0.7 m within 5 s, never below 0.5 m afterwards):
+
+| start | success | median time to 0.7 m |
+|---|---|---|
+| on its back, flat (`Host-G1-Ground`) | 99.3% | 1.72 s |
+| on its front, flat (`Host-G1-Prone`) | 69.3% | 4.16 s |
+| on its back, rocks (`Host-G1-Rocks`) | 88.3% | 1.96 s |
+
+**How it's switched in.** Each robot has a state machine:
+- **WALK:** the legs drive. Tilting past 70° (mjlab's own `fell_over` angle) is a fall.
+- **STANDUP:** 0.6 s limp (HoST's "unactuated window": zero actions and inputs while the body
+  settles), then the stand-up policy. Pelvis above 0.7 m with the torso within 20° of upright,
+  for 0.4 s, hands the robot back.
+- **STEADY:** the legs again, told to stand still for 0.5 s, then WALK.
+
+The stand-up policy differs from the legs in almost everything, and each difference had to be
+reproduced:
+- **Its control law.** Targets are the current joint angles plus β·(kp_host/kp_mjlab)·action,
+  recomputed every 0.005 s physics substep. The 6 joints its 23-joint model lacks are held at 0.
+- **Its damping.** It was trained with HoST's joint damping. The damping is a per-world model
+  field (`actuator_biasprm`), swapped when a robot falls and swapped back at the hand-over.
+- **Its input:** 6 frames of 76 numbers, oldest first, all 0 during the window.
+- **One action term, not two.** The legs' "last action" input reads mjlab's whole action
+  vector, so a second action term would change the legs' input size. Instead the legs' term is
+  replaced by one that overrides the targets of the worlds getting up (`StandupAction`).
+- **mjlab's `fell_over` termination is removed.** It respawns a fallen robot standing.
+- **Contact buffers:** a lying robot touches the ground in many places, so nconmax 64 and
+  njmax 600 (the flat task: 300). No test below overflowed.
+- **The network matches.** `load_standup_actor` rebuilds the rsl_rl actor as a plain MLP. On
+  1000 random inputs it gives exactly the output of HoST's TorchScript export.
+- **Not reproduced:** the per-robot gain, motor-strength and offset randomization and the action
+  delay of training. These run at their nominal values, which are inside the training range.
+
+**Drops** (`eval_standup.py --robots 512 --speeds 1 3 5`). 256 robots dropped from 0.5 m on
+their back and 256 on their front, on flat ground. After the hand-over they're told to walk
+at 1 m/s:
+
+| start | HoST success | handed to the legs in time (5.6 s) | ... by the end (8.6 s) | median time to the hand-over | walks on, no new fall |
+|---|---|---|---|---|---|
+| back | 100% | 100% | 100% | 2.0 s | 100% |
+| front | 91% | 89% | 95% | 4.5 s | 95% |
+
+From the back this matches HoST's own 99.3%, so the wiring is right. (Our time includes the
+drop and the 0.4 s upright hold.) From the front it does better than HoST's 69%, whose prone
+start uses a different pose and height. Every robot that was handed over walked on without
+falling again.
+
+**Trips on rocks.** Robots run along a rocky lane (25 rocks over 15 × 5 m, as in
+`eval_terrain.py`) for 12 s. Every fall goes to the stand-up policy, and a robot that gets up
+runs on at the same speed. "Back / front / side" is how the robot lies when its 0.6 s window
+ends. Rates are over falls that ended (up, or given up) before the 12 s were over; 25-43% of
+robots were still down at the end.
+
+| speed | robots that fell | falls: back / front / side | got up in time: back / front / side | get-up time: back / front / side | fell again within 2 s of getting up |
+|---|---|---|---|---|---|
+| 1 m/s | 76% | 22 / 178 / 96 | 91% / 63% / 72% | 2.7 / 4.3 / 3.2 s | 3% of falls |
+| 3 m/s | 89% | 40 / 324 / 151 | 98% / 72% / 80% | 2.5 / 4.1 / 3.1 s | 20% |
+| 5 m/s | 88% | 101 / 300 / 184 | 97% / 85% / 95% | 2.6 / 4.1 / 3.1 s | 25% |
+
+- **Tripping throws the robots forward.** 51-63% of finished falls end face down, and only
+  7-17% on the back, which is the only start the stand-up policy was trained on.
+- **Face down among rocks is the weak case:** 63-85% get up in time, against 89% face down on
+  flat ground and 91-98% on the back.
+- **Robots trip again right after getting up.** At 3-5 m/s, a fifth to a quarter of falls are
+  followed by another within 2 s of the hand-over: the robot sets off at full speed into the
+  same rocks. At 1 m/s it's 3%.
+- We haven't looked into why trips at 1 m/s get up less often than at 5 m/s.
+
+**The game**, 1024 games per row, on the terrain arena, policies' mean actions. With stand-up,
+"runner fell" means the runner gave up: it was still down 5 s after its window. "Any way" adds
+up all the ways each side wins. The last two columns are over every game played: each robot's
+falls per game, and the share of falls it got up from in time.
+
+20 s games (the default):
+
+| chaser vs runner | stand-up | caught | time up | runner fell | chaser fell | runner out | chaser wins, any way | runner wins, any way | falls per game (runner, chaser) | got up in time |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `pursue` vs `flee` | no | 10.6 | 1.1 | 48.1 | 40.1 | 0.0 | 58.7 | 41.2 | | |
+| | yes | 33.1 | 30.4 | 16.9 | 18.0 | 0.5 | 50.5 | 49.6 | 0.89, 0.85 | 74% in 3.6 s |
+| learned vs `flee` | no | 30.8 | 0.5 | 39.7 | 28.5 | 0.0 | 70.5 | 29.4 | | |
+| | yes | 67.9 | 10.8 | 9.7 | 9.6 | 0.7 | 78.3 | 21.8 | 0.66, 0.61 | 79% in 3.4 s |
+| `pursue` vs learned | no | 1.1 | 2.1 | 47.6 | 43.5 | 5.7 | 54.4 | 45.6 | | |
+| | yes | 7.0 | 49.9 | 14.6 | 19.0 | 9.1 | 30.7 | 69.3 | 1.00, 0.94 | 78% in 3.4 s |
+| learned vs learned | no | 10.5 | 1.0 | 48.7 | 31.0 | 8.6 | 67.8 | 32.1 | | |
+| | yes | 48.4 | 20.0 | 7.1 | 10.8 | 13.1 | 68.6 | 31.3 | 0.83, 0.78 | 85% in 3.3 s |
+
+60 s games:
+
+| chaser vs runner | stand-up | caught | time up | runner fell | chaser fell | runner out | chaser wins, any way | runner wins, any way | falls per game (runner, chaser) | got up in time |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `pursue` vs `flee` | no | 11.0 | 0.0 | 51.1 | 37.9 | 0.0 | 62.1 | 37.9 | | |
+| | yes | 45.5 | 2.5 | 21.9 | 26.9 | 1.5 | 68.9 | 31.2 | 1.19, 1.12 | 73% in 3.7 s |
+| learned vs `flee` | no | 31.4 | 0.0 | 41.3 | 26.5 | 0.1 | 72.8 | 27.2 | | |
+| | yes | 72.0 | 0.1 | 11.1 | 14.9 | 1.2 | 84.3 | 15.7 | 0.77, 0.75 | 78% in 3.4 s |
+| `pursue` vs learned | no | 1.8 | 0.0 | 47.0 | 44.5 | 6.5 | 55.3 | 44.5 | | |
+| | yes | 14.0 | 7.5 | 23.4 | 36.3 | 17.7 | 55.1 | 44.9 | 1.48, 1.39 | 75% in 3.5 s |
+| learned vs learned | no | 10.8 | 0.0 | 47.7 | 28.6 | 12.9 | 71.4 | 28.6 | | |
+| | yes | 52.0 | 0.1 | 9.6 | 14.0 | 23.9 | 85.5 | 14.6 | 0.95, 0.87 | 83% in 3.3 s |
+
+Draws and "chaser out" (at most 1.8%) are left out. Each figure is within about ±3 points (95%).
+
+- **Without stand-up nothing changed.** The rows without stand-up match the 1024-game table of
+  the previous section within ±3 points, so the old code path behaves as before.
+- **Falls stop deciding the game.** At 20 s, games ending in a fall drop from 68-91% to 18-35%.
+  Catches (7-68%) and time-ups (11-50%) take their place.
+- **Skill shows again.** Against `flee`, the learned chaser now wins 78% (any way) where
+  `pursue` wins 51%: a 28-point edge, up from 12. Against `pursue`, the learned runner cuts the
+  chaser's wins from 51% to 31%: a 20-point edge, up from 4. On the flat arena the edges were
+  larger still (88% vs 28% caught, 78% vs 68% time up). The rocks still cost every robot 0.6-1.0
+  falls per 20 s game, and about one fall in five ends the game.
+- **Who wins between the two learned roles hardly moves** (68% vs 69% for the chaser at 20 s):
+  both sides trip alike.
+
+**20 s or 60 s?** (The question that started this.)
+- **Without stand-up, game length doesn't matter.** Almost no game reaches 20 s (time-ups at
+  most 2.1%, and 0% at 60 s). The runner's wins, any way, move by 1-4 points.
+- **With stand-up, a longer game is much harder for the runner.** Time-ups drop from 11-50% to
+  0.1-7.5%, and the runner's wins fall by 6-24 points. That's mostly the rules: the chaser needs
+  one catch at any moment, while the runner has to last three times as long, falling 0.8-1.5
+  times per game.
+- **Training on 20 s games adds a little on top.** The scripted runner `flee`, which ignores
+  time, loses 18 points against `pursue` going from 20 to 60 s. The learned runner loses 24.
+  Its extra losses show up as leaving the arena (9% → 18%; against the learned chaser, 13% →
+  24%). Its time-left input still runs from 1 to 0, just three times slower, so it's in range,
+  but its timing is off.
+- So compare policies at the length they were trained on, and train with `--game_s 60` (and a
+  larger γ) if long games are the goal.
+
+**Commands:**
+
+```bash
+uv run python eval_standup.py --robots 512 --speeds 1 3 5
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain --num_games 1024 --standup runs/standup/model_11000.pt   # add --runner flee / --chaser pursue / --game_s 60
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain --standup runs/standup/model_11000.pt --video videos/standup_chaser --game_s 40
+```
+
+**Next ideas** (none run yet):
+- Retrain the game policy with `--standup --terrain`. It may also need to know when its
+  opponent is down: the actor sees only its own tilt.
+- Train the stand-up policy on the falls that actually happen: face down and on the side,
+  among rocks. HoST's port already has a prone task.
+- After a hand-over, run slowly for a moment, or steer away from the rocks, to cut the refalls.
