@@ -133,7 +133,7 @@ class MjlabEnv:
   def __init__(
     self, task, num_envs, device, play=False, video_dir=None, video_steps=1000,
     stage_iters=None, speed_stages=None, steps_per_iter=24, fixed_speed=None, rewards=None,
-    external_commands=False, viewer=None, fixed_turn=0.0, spec_fn=None, expand_fields=(),
+    external_commands=False, viewer=None, fixed_turn=0.0, spec_fn=None, expand_fields=(), cfg_fn=None,
   ):
     # play=True: evaluation version of the task (no pushes, no sensor noise, no time limit).
     cfg = load_env_cfg(task, play=play)
@@ -150,6 +150,8 @@ class MjlabEnv:
       set_external_commands(cfg)
     if rewards:
       override_rewards(cfg, **rewards)
+    if cfg_fn is not None:  # any other change to the task, e.g. standup.configure
+      cfg_fn(cfg)
     if video_dir:
       cfg.viewer.width, cfg.viewer.height = 640, 480
     for key, value in (viewer or {}).items():  # camera settings, e.g. {"distance": 20.0}
