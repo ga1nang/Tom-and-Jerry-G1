@@ -35,6 +35,7 @@ if args.checkpoint:
 actor_obs, _ = env.reset()
 first = torch.full((G,), -1, dtype=torch.long, device=device)  # result of each slot's first game
 first_len = torch.zeros(G, device=device)
+first_falls = torch.zeros(G, 2, device=device)  # --standup: falls of the runner and the chaser in each first game
 # --terrain: decisions each role spent on each terrain type, and where robots fell (first games only).
 time_on = torch.zeros(2, len(TERRAINS), device=device)
 fell_on = torch.zeros(len(TERRAINS), device=device)
@@ -60,18 +61,27 @@ with torch.no_grad():
       fell_on += torch.bincount(env.terrain_under[G:][new & (env.outcome == CHASER_FELL)], minlength=len(TERRAINS))
     first[new] = env.outcome[new]
     first_len[new] = env.length_s[new]
+    if env.recovery:
+      first_falls[new] = env.falls[new].float()
     step += 1
 
 done = first >= 0
 counts = torch.bincount(first[done], minlength=len(OUTCOMES)).float()
 n = int(done.sum())
 print(f"runner: {args.runner} | chaser: {args.chaser} | games: {n} | arena {args.arena:.0f} m"
-      + (" | terrain" if args.terrain else ""))
+      + (" | terrain" if args.terrain else "") + f" | {args.game_s:.0f} s"
+      + (f" | stand-up, {args.standup_s:.0f} s to get up" if args.standup else ""))
 for k, name in enumerate(OUTCOMES):
   print(f"  {name:11s} {counts[k].item() / max(n, 1):6.1%}")
 caught = first == CHASER_WIN
 if caught.any():
   print(f"  mean catch time: {first_len[caught].mean().item():.1f} s")
+if env.recovery:
+  print(f"  falls per game: runner {first_falls[done, 0].mean().item():.2f}, chaser {first_falls[done, 1].mean().item():.2f}")
+  r = env.recovery  # these count every game played, not just the first ones
+  finished = (r.stood + r.gave_up_count).sum().clamp(min=1)  # falls that ended in getting up or giving up
+  print(f"  of all falls: up in time {r.stood.sum() / finished:.0%} (in {r.stand_s.sum() / r.stood.sum().clamp(min=1):.1f} s),"
+        f" gave up {r.gave_up_count.sum() / finished:.0%}, fell again within 2 s of getting up {r.refalls / max(r.falls, 1):.0%}")
 if args.terrain:
   share = time_on / time_on.sum(dim=1, keepdim=True)
   print("  time on each terrain (runner / chaser): "

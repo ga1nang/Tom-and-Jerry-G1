@@ -5,6 +5,8 @@ The game policy only picks each robot's command, 10 times per second.
 
 Rules, checked after every 0.02 s physics step (the first one that applies wins):
   1. A robot fell over or left the arena: it loses (both on the same step: draw).
+     With --standup, a fall only costs time: a frozen stand-up policy (standup.py) gets the
+     robot up again, and it loses only if it isn't standing standup_s after its 0.6 s settle.
   2. The two pelvises are closer than catch_radius: the chaser wins.
   3. game_s seconds have passed: the runner wins.
 
@@ -27,6 +29,7 @@ from mjlab.utils.lab_api.math import wrap_to_pi
 from mjlab.viewer.viewer_config import ViewerConfig
 from mjlab_env import MjlabEnv
 from ppo import load_actor_critic
+from standup import Recovery, configure
 from terrain import FIELDS, ROCKY, TerrainArena
 
 TASK = "Mjlab-Velocity-Flat-Unitree-G1"
@@ -50,11 +53,16 @@ def add_game_args(p):
   p.add_argument("--shaping", type=float, default=1.0, help="chaser reward per metre closed (runner: the opposite)")
   p.add_argument("--terrain", action="store_true",
                  help="patchwork arena: normal, grass, mud and rocky cells, a new layout every game (terrain.py)")
+  p.add_argument("--standup", default=None,
+                 help="stand-up checkpoint (e.g. runs/standup/model_11000.pt): fallen robots get up again")
+  p.add_argument("--standup_s", type=float, default=5.0,
+                 help="with --standup: a robot not standing this long after its 0.6 s settle loses")
 
 
 def game_kwargs(args):
   return dict(legs_ckpt=args.legs, arena=args.arena, catch_radius=args.catch_radius,
-              game_s=args.game_s, shaping=args.shaping, terrain=args.terrain)
+              game_s=args.game_s, shaping=args.shaping, terrain=args.terrain,
+              standup_ckpt=args.standup, standup_s=args.standup_s)
 
 
 def rotate(v, heading):
@@ -67,6 +75,7 @@ class ChaseEnv:
   def __init__(
     self, num_games, device, legs_ckpt, arena=20.0, catch_radius=0.8, game_s=20.0,
     decision_s=0.1, shaping=1.0, start_dist=(3.0, 8.0), video_dir=None, camera="chaser", terrain=False,
+    standup_ckpt=None, standup_s=5.0,
   ):
     self.G = num_games
     self.num_envs = 2 * num_games  # agents, as ppo.py sees them
@@ -91,12 +100,16 @@ class ChaseEnv:
     # terrain=True: grass / mud / rocky patches (terrain.py). Their per-world model fields are
     # expanded so every game can have its own layout.
     self.terrain = TerrainArena(arena, device) if terrain else None
+    # standup_ckpt: the task gets the switchable action (standup.configure), and the joint
+    # damping becomes per-world, so it can change while a robot gets up.
+    expand = (FIELDS if terrain else ()) + (("actuator_biasprm",) if standup_ckpt else ())
     self.mj = MjlabEnv(TASK, self.num_envs, device, play=True, external_commands=True,
                        video_dir=video_dir, video_steps=int(game_s / 0.02), viewer=viewer,
-                       spec_fn=self.terrain.spec_fn if terrain else None,
-                       expand_fields=FIELDS if terrain else ())
+                       spec_fn=self.terrain.spec_fn if terrain else None, expand_fields=expand,
+                       cfg_fn=configure if standup_ckpt else None)
     if terrain:
       self.terrain.bind(self.mj)
+    self.recovery = Recovery(self.mj, standup_ckpt, device, standup_s) if standup_ckpt else None
     if video_dir:
       # mjlab calls debug_vis() of everything in this dict when it renders a frame.
       self.mj.env.unwrapped.manager_visualizers["chase"] = self
@@ -119,6 +132,7 @@ class ChaseEnv:
     # Result of the games that ended in the last step(): index into OUTCOMES, -1 = still playing.
     self.outcome = torch.full((num_games,), -1, dtype=torch.long, device=device)
     self.length_s = torch.zeros(num_games, device=device)
+    self.falls = torch.zeros(num_games, 2, dtype=torch.long, device=device)  # falls (runner, chaser) of the games that just ended
     self.terrain_under = None  # terrain type under every robot at the last decision (terrain only)
 
   # ------------------------------------------------------------------------- #
@@ -154,6 +168,8 @@ class ChaseEnv:
     runner_xy, chaser_xy = runner_xy[rows, pick], chaser_xy[rows, pick]
     yaw = torch.rand(2 * n, device=dev) * 2 * math.pi - math.pi
     self.mj.place_robots(worlds, torch.cat([runner_xy, chaser_xy]), yaw)
+    if self.recovery:
+      self.recovery.reset(worlds)
     self.steps[games] = 0
     self.command[worlds] = 0.0
     self.dist[games] = (runner_xy - chaser_xy).norm(dim=1)
@@ -196,6 +212,8 @@ class ChaseEnv:
       # Game rule: the terrain under a robot caps its forward speed (e.g. 2 m/s in mud).
       self.terrain_under = self.terrain.under_robots()
       self.command[:, 0] = torch.minimum(self.command[:, 0], self.terrain.speed_cap(self.terrain_under))
+    if self.recovery:  # a robot that is down, or just got up, is told to stand still
+      self.command[self.recovery.down] = 0.0
     legs_obs = self.mj.set_command(self.command)
 
     outcome = torch.full((G,), -1, dtype=torch.long, device=self.device)
@@ -203,9 +221,14 @@ class ChaseEnv:
       if self.terrain:
         self.terrain.step_effects()
       with torch.no_grad():
-        legs_obs, _, _, fell, _, _ = self.mj.step(self.legs.act_deterministic(legs_obs))
+        actions = self.legs.act_deterministic(legs_obs)
+        if self.recovery:
+          actions = self.recovery.act(actions)  # the stand-up policy drives the robots that are down
+        legs_obs, _, _, fell, _, _ = self.mj.step(actions)
+      if self.recovery:
+        fell = self.recovery.update()  # a fall only counts once the robot has given up getting up
       self.steps += 1
-      pos = self._pos()  # a robot that fell has already been respawned by mjlab, but fell says so
+      pos = self._pos()  # without --standup, a robot that fell has already been respawned by mjlab
       lost = fell | (pos.abs().max(dim=1).values > self.half)
       fell_r, fell_c, lost_r, lost_c = fell[:G], fell[G:], lost[:G], lost[G:]
       result = torch.full_like(outcome, -1)
@@ -234,6 +257,9 @@ class ChaseEnv:
       for k, name in enumerate(OUTCOMES):
         info[f"Game/{name}"] = (results == k).float().mean().item()
       info["Game/length_s"] = self.length_s[ended].mean().item()
+      if self.recovery:
+        self.falls = self.recovery.robot_falls.reshape(2, G).T.clone()  # read before the robots respawn
+        info["Game/falls"] = self.falls[ended].float().mean().item()  # per robot and game
       self._new_games(ended.nonzero().squeeze(-1))
 
     terminated = ended.repeat(2)  # the game is over for both players

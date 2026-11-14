@@ -38,7 +38,7 @@ train(
   device=device,
   log_dir=args.log_dir,
   resume=args.resume,
-  log_keys=tuple(f"Game/{name}" for name in OUTCOMES) + ("Game/length_s",),
+  log_keys=tuple(f"Game/{name}" for name in OUTCOMES) + ("Game/length_s", "Game/falls"),
   print_keys=print_keys,
 )
 env.close()
