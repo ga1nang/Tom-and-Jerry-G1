@@ -15,7 +15,6 @@ from terrain import CELLS, FIELDS, ROCKY, TERRAINS, TerrainArena
 
 TASK = "Mjlab-Velocity-Flat-Unitree-G1"
 WARMUP_S = 1.0  # robots start standing: ignore their speed for the first second
-LANE_ROCKS = 25  # rocks in each rocky lane (15 x 5 m): about a rocky cell's 5 per 16 m²
 
 p = argparse.ArgumentParser()
 p.add_argument("--legs", default="runs/g1_turn/model_4349.pt", help="locomotion checkpoint")
@@ -46,12 +45,8 @@ def run(speed, turn, seconds):
   """Everyone starts at x = -8 m facing +x; returns per-type fall fraction, speed, yaw rate, foot depth."""
   y = (torch.rand(n, device=device) * 2 - 1) * 6.0
   # Rocks (rocky robots only): along each robot's lane, from 2 m ahead of it to the far side.
-  # The arena's other rocks stay parked (NaN).
-  rock_xy = torch.full((n, arena.num_rocks, 2), float("nan"), device=device)
   rocky = types == ROCKY
-  rock_xy[rocky, :LANE_ROCKS, 0] = torch.empty(int(rocky.sum()), LANE_ROCKS, device=device).uniform_(-6.0, 9.0)
-  rock_xy[rocky, :LANE_ROCKS, 1] = y[rocky, None] + torch.empty(int(rocky.sum()), LANE_ROCKS, device=device).uniform_(-2.5, 2.5)
-  arena.place_rocks(worlds, rock_xy, torch.rand(n, arena.num_rocks, device=device) * 2 * torch.pi)
+  arena.place_lane_rocks(worlds[rocky], y[rocky])
   obs = mj.place_robots(worlds, torch.stack([torch.full_like(y, -8.0), y], dim=1), torch.zeros(n, device=device))
   obs = mj.set_command(torch.tensor([speed, 0.0, turn], device=device).repeat(n, 1))
 

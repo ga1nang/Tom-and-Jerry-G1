@@ -50,6 +50,7 @@ COLOR = ((0.36, 0.38, 0.43, 1.0), (0.20, 0.42, 0.14, 1.0), (0.30, 0.18, 0.09, 1.
 MUD_DRAG = 0.5  # 1/s: in mud, the pelvis is pulled back by MUD_DRAG × robot mass × velocity
 
 ROCKS_PER_CELL = 5
+LANE_ROCKS = 25  # rocks in a 15 x 5 m test lane (place_lane_rocks): about a rocky cell's 5 per 16 m²
 ROCK_COLOR = (0.10, 0.09, 0.09, 1.0)
 ROCK_MARGIN = 0.6  # rock centres stay this far inside their cell (m), so no rock pokes out of it
 TILE_HALF_THICKNESS = 0.001  # visual tiles: 2 mm thick, resting on the plane
@@ -191,6 +192,15 @@ class TerrainArena:
     self.data.mocap_quat[w, self.rock_mocap[None, :]] = quat
     self.model.body_pos[w, self.rock_bodies[None, :]] = pos  # where a world reset puts them
     self.model.body_quat[w, self.rock_bodies[None, :]] = quat
+
+  def place_lane_rocks(self, worlds, y, count=LANE_ROCKS):
+    """Tests without a game (eval_terrain.py, eval_standup.py): scatter `count` rocks along each
+    world's lane, from x = -6 to 9 m and within 2.5 m of y (n,). The other rocks stay parked."""
+    n, dev = len(worlds), self.device
+    xy = torch.full((n, self.num_rocks, 2), float("nan"), device=dev)
+    xy[:, :count, 0] = torch.empty(n, count, device=dev).uniform_(-6.0, 9.0)
+    xy[:, :count, 1] = y[:, None] + torch.empty(n, count, device=dev).uniform_(-2.5, 2.5)
+    self.place_rocks(worlds, xy, torch.rand(n, self.num_rocks, device=dev) * 2 * torch.pi)
 
   # ------------------------------------------------------------------------- #
   # Queries and effects
