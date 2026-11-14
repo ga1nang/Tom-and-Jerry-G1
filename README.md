@@ -31,6 +31,9 @@ took about 5.6 hours of training.
 - **A terrain arena.** An optional patchwork of grass, mud and rocky cells (`--terrain`), each
   with its own grip, softness and speed cap. The current policies can't see the terrain, and
   when they play on it, the rocks decide most games.
+- **Getting back up.** With `--standup`, a frozen stand-up policy (HoST, trained separately
+  on the same robot) takes over a fallen robot and hands it back to the legs once it stands.
+  On the rocky arena, falls stop ending most games, and the learned strategies matter again.
 
 ## Contents
 
@@ -46,6 +49,7 @@ took about 5.6 hours of training.
   - [Trap 2: the legs stop turning](#trap-2-the-legs-stop-turning)
 - [The tag game](#the-tag-game)
   - [Terrain arena: grass, mud and rocks](#terrain-arena-grass-mud-and-rocks-evaluation-only)
+  - [Getting up after a fall](#getting-up-after-a-fall---standup)
 - [Step-by-step training guide](#step-by-step-training-guide)
 - [Command reference](#command-reference)
 - [Known issues and next ideas](#known-issues-and-next-ideas)
@@ -56,14 +60,16 @@ took about 5.6 hours of training.
 | file | lines | what it does |
 |---|---|---|
 | [`ppo.py`](ppo.py) | 368 | PPO for any vectorized environment: networks, rollouts, GAE, the update, the training loop, checkpoints |
-| [`mjlab_env.py`](mjlab_env.py) | 238 | `MjlabEnv`: wraps mjlab's environment in the interface `ppo.py` expects; speed curricula, extra reward terms, fixed commands, video |
+| [`mjlab_env.py`](mjlab_env.py) | 240 | `MjlabEnv`: wraps mjlab's environment in the interface `ppo.py` expects; speed curricula, extra reward terms, fixed commands, video |
 | [`train_walk.py`](train_walk.py) | 85 | Trains the locomotion policy ("the legs") |
 | [`eval_walk.py`](eval_walk.py) | 72 | Counts falls, measures achieved vs commanded speed and turning, records a video |
-| [`chase_env.py`](chase_env.py) | 312 | `ChaseEnv`: the runner vs chaser game on top of frozen legs, plus scripted players |
+| [`chase_env.py`](chase_env.py) | 338 | `ChaseEnv`: the runner vs chaser game on top of frozen legs, plus scripted players |
 | [`train_chase.py`](train_chase.py) | 44 | Trains the game policy (both roles, one network) |
-| [`eval_chase.py`](eval_chase.py) | 84 | Plays games (learned or scripted on either side), prints who wins and how, records a video |
-| [`terrain.py`](terrain.py) | 226 | `TerrainArena`: the optional grass / mud / rocky patchwork arena for the game (`--terrain`) |
-| [`eval_terrain.py`](eval_terrain.py) | 95 | The legs alone on each terrain type: falls, speed, turning, how far the feet sink |
+| [`eval_chase.py`](eval_chase.py) | 94 | Plays games (learned or scripted on either side), prints who wins and how, records a video |
+| [`terrain.py`](terrain.py) | 236 | `TerrainArena`: the optional grass / mud / rocky patchwork arena for the game (`--terrain`) |
+| [`eval_terrain.py`](eval_terrain.py) | 90 | The legs alone on each terrain type: falls, speed, turning, how far the feet sink |
+| [`standup.py`](standup.py) | 296 | `Recovery`: a frozen stand-up policy gets fallen robots up again (`--standup`), switched in per robot |
+| [`eval_standup.py`](eval_standup.py) | 140 | The stand-up policy with the legs, no game: robots dropped on their back or front, and robots tripping on rocks |
 | [`EXPERIMENTS.md`](EXPERIMENTS.md) | | The lab notebook: every run, its flags, the evaluation numbers, and what went wrong |
 | [`CLAUDE.md`](CLAUDE.md) | | Notes for AI coding assistants. They're also a good list of the non-obvious details for humans. |
 | `docs/` | | The GIFs in this README |
@@ -88,6 +94,9 @@ uv run python train_walk.py --num_envs 64 --iterations 2 --log_dir runs/smoke   
 you need these two files, at these paths:
 - `runs/g1_turn/model_4349.pt`: the legs, 5 MB
 - `runs/chase/model_499.pt`: the game policy, 1 MB
+- `runs/standup/model_11000.pt`: the stand-up policy, 21 MB (only for `--standup`). It was
+  trained in a separate project, a port of [HoST](https://github.com/InternRobotics/HoST) to
+  mjlab on the same G1.
 
 Ask the author for them, or train them yourself with the
 [step-by-step training guide](#step-by-step-training-guide). Then run:
@@ -298,7 +307,8 @@ wall and steps out, and a new game starts.*
 - The **chaser wins** if the two pelvises come within 0.8 m.
 - The **runner wins** if it isn't caught within 20 s.
 - A robot that **falls** or **leaves the arena** loses. If both do it on the same step, it's
-  a draw.
+  a draw. With [`--standup`](#getting-up-after-a-fall---standup), a robot that falls gets up
+  again, and loses only if it isn't standing 5 s after a 0.6 s settle.
 - The rules are checked after every 0.02 s control step.
 
 ### Design
@@ -424,6 +434,60 @@ building this:
 uv run python eval_terrain.py                                                   # the legs on each terrain
 uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain      # the game on terrain
 uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain --video videos/terrain --camera overhead
+```
+
+### Getting up after a fall (`--standup`)
+
+![The runner trips into a pile of rocks, gets up and is caught](docs/standup.gif)
+
+*Camera behind the chaser (red disc). The runner trips into a pile of rocks, lies there, gets
+up in about 2 s and runs on, and the chaser catches it a moment later.*
+
+On the terrain arena, most games ended with a fall. `--standup CKPT` makes a fall cost time
+instead: a stand-up policy takes over the fallen robot, gets it up, and hands it back to the
+legs. A robot that isn't standing 5 s after a 0.6 s settle loses (`--standup_s`).
+- **The stand-up policy** comes from a separate project: [HoST](https://github.com/InternRobotics/HoST)
+  (RSS 2025), ported to mjlab on the same G1 and trained to get up from lying on its back on
+  rocky ground. Here it's frozen, like the legs.
+- **Each robot has a state machine:** walk → tilted past 70° → the stand-up policy → upright
+  for 0.4 s → the legs, told to stand still for 0.5 s → walk.
+- **The stand-up policy has its own control law, joint damping and inputs,** so the switch
+  swaps all three, per robot (`standup.py`). Get any of them wrong and it quietly fails to
+  stand. [`CLAUDE.md`](CLAUDE.md) lists the pitfalls.
+
+**Without a game** (`eval_standup.py`): dropped on its back, the robot gets up 100% of the
+time, in about 2 s. Dropped on its front, 89% in time, in about 4.5 s. Tripping on rocks is
+harder. The robots mostly land face down among the rocks, and 63-98% get up, depending on how
+they lie. At 3-5 m/s, a fifth to a quarter of falls are followed by another within 2 s of
+getting up, because the robot sets off at full speed into the same rocks.
+
+**In the game.** 20 s games on the terrain arena, 1024 per row, the same policies as above.
+Each cell shows without → with stand-up. "Ended by a fall" means the robot fell (without) or
+gave up getting up (with):
+
+| chaser vs runner | caught | time up | ended by a fall | chaser wins, any way |
+|---|---|---|---|---|
+| `pursue` vs `flee` | 10.6 → 33.1 | 1.1 → 30.4 | 88.2 → 34.9 | 58.7 → 50.5 |
+| learned vs `flee` | 30.8 → 67.9 | 0.5 → 10.8 | 68.2 → 19.3 | 70.5 → 78.3 |
+| `pursue` vs learned | 1.1 → 7.0 | 2.1 → 49.9 | 91.1 → 33.6 | 54.4 → 30.7 |
+| learned vs learned | 10.5 → 48.4 | 1.0 → 20.0 | 79.7 → 17.9 | 67.8 → 68.6 |
+
+- **Falls stop deciding the game.** Catches and time-ups come back. Each robot still falls
+  0.6-1.0 times per game and gets up from 74-85% of its falls, in about 3.5 s.
+- **The learned policies' edge shows again.** Against `flee`, the learned chaser wins 28 points
+  more often than `pursue` (12 without stand-up). Against `pursue`, the learned runner cuts the
+  chaser's wins by 20 points (4 without).
+- **Game length now matters.** Without stand-up, almost no game reaches 20 s, so 60 s games
+  change nothing. With stand-up, 60 s games cut the runner's wins by 6-24 points: it has to
+  last three times as long while falling about once per game. The learned runner, trained on
+  20 s games, loses 6 points more than the scripted `flee`, mostly by leaving the arena.
+
+[`EXPERIMENTS.md`](EXPERIMENTS.md) has the full tables, the 60 s games and the trip test.
+
+```bash
+uv run python eval_standup.py                                                    # drops and trips, no game
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain --standup runs/standup/model_11000.pt
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain --standup runs/standup/model_11000.pt --video videos/standup --game_s 40
 ```
 
 ## Step-by-step training guide
@@ -797,12 +861,24 @@ turning: commanded 0.00 rad/s | achieved 0.01 rad/s | mean error 0.23 rad/s
 | `--game_s` | 20 | the runner wins after this many seconds |
 | `--shaping` | 1.0 | chaser reward per metre closed (the runner gets the opposite) |
 | `--terrain` | off | the grass / mud / rocky patchwork arena, with a new layout every game |
+| `--standup CKPT` | off | fallen robots get up again with this stand-up policy (e.g. `runs/standup/model_11000.pt`) |
+| `--standup_s` | 5 | with `--standup`: a robot not standing this long after its 0.6 s settle loses |
 | `--num_games` | 2048 (train), 256 (eval) | games at once, 2 robots each |
 | `--iterations`, `--log_dir`, `--resume` | 500, `runs/chase` | training only |
 | `--checkpoint` | | eval: the game policy |
 | `--runner policy\|flee`, `--chaser policy\|pursue` | `policy` | eval: who plays each side |
 | `--sample` | | eval: sample actions instead of using the mean |
 | `--video DIR`, `--camera chaser\|overhead` | `chaser` | eval: record one game |
+
+### `eval_standup.py` (getting up, no game)
+
+| flag | default | meaning |
+|---|---|---|
+| `--standup` | `runs/standup/model_11000.pt` | stand-up checkpoint |
+| `--legs` | `runs/g1_turn/model_4349.pt` | locomotion checkpoint |
+| `--robots` | 256 | robots per test (the drop test puts half on their back, half on their front) |
+| `--speeds` | 3 5 | speeds of the rocky-lane trip test (m/s) |
+| `--standup_s` | 5 | time to get up after the 0.6 s settle |
 
 ### What to watch in TensorBoard
 
@@ -812,7 +888,8 @@ turning: commanded 0.00 rad/s | achieved 0.01 rad/s | mean error 0.23 rad/s
   - `Curriculum/command_vel/lin_vel_x_max` (the current top speed);
   - `kl`, `lr` and `action_std`.
 - **Game:** `Game/chaser_win`, `Game/runner_win`, `Game/runner_out` and the other outcomes,
-  plus `Game/length_s`. The game's `mean_return` is about 0 by construction.
+  plus `Game/length_s`, and with `--standup`, `Game/falls` (falls per robot and game). The
+  game's `mean_return` is about 0 by construction.
 
 ### Recording and exporting videos
 
@@ -825,6 +902,7 @@ uv run python eval_walk.py --checkpoint runs/g1_turn/model_4349.pt --speed 5 --s
 uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --video videos/game                       # behind the chaser
 uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --video videos/game_top --camera overhead  # whole arena
 uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain --game_s 40 --video videos/terrain_40s --camera overhead
+uv run python eval_chase.py --checkpoint runs/chase/model_499.pt --terrain --standup runs/standup/model_11000.pt --game_s 40 --video videos/standup  # falls and getting up
 ```
 
 - **Where the file goes:** `FOLDER/rl-video-step-0.mp4`. The name is always the same, so a new
@@ -863,6 +941,11 @@ redraws the whole floor every frame, so keep those clips short.
   - terrain inputs for the game policy (the cells around it and the nearest rocks), then
     retraining with `--terrain`;
   - scripted players that avoid rocky cells.
+- **Stand-up was trained only from lying on its back,** but tripping mostly throws robots
+  face down, and among rocks they get up 63-85% of the time from there. The game policy also
+  wasn't retrained with `--standup`, and doesn't know when its opponent is down. Next steps:
+  train the stand-up policy on the chase's own falls, run slowly for a moment after getting
+  up, and retrain the game with `--standup --terrain`.
 
 ## References
 
@@ -872,4 +955,6 @@ redraws the whole floor every frame, so keep those clips short.
 - Schulman et al., [High-Dimensional Continuous Control Using Generalized Advantage Estimation](https://arxiv.org/abs/1506.02438), 2016.
 - Ng, Harada and Russell, *Policy invariance under reward transformations: theory and
   application to reward shaping*, ICML 1999.
+- Huang et al., [Learning Humanoid Standing-up Control across Diverse Postures](https://arxiv.org/abs/2502.08378)
+  (HoST), RSS 2025: the method behind the stand-up policy.
 - [`EXPERIMENTS.md`](EXPERIMENTS.md): the full run log, with every number behind this README.

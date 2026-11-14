@@ -4,7 +4,7 @@ drop: robots are dropped from 0.5 m lying on their back or front, on flat ground
       stand-up policy was trained. It reports HoST's success (the pelvis gets above 0.7 m within
       5 s after the 0.6 s window and doesn't drop below 0.5 m in that time), the hand-over to
       the legs and the get-up time. Then the legs are told to walk at 1 m/s: "walks on" = no
-      new fall before the end (at least 2 s of walking).
+      new fall before the end (at least 2 s of walking for robots handed over in time).
 trip: robots run along a rocky lane (as in eval_terrain.py) at each of --speeds for 12 s. Every
       fall goes to the stand-up policy, and a robot that gets up walks on at the same speed.
 """
