@@ -9,10 +9,10 @@ the GPU) is used only as the physics simulator.
 Everything was trained on a laptop with an RTX 3050 (4 GB). The path to the final policies
 took about 5.6 hours of training.
 
-| Sprinting at 5 m/s | Tag, seen from above |
+| Sprinting at 5 m/s | Tag on the terrain arena, seen from above |
 |---|---|
-| ![G1 sprinting at 5 m/s](docs/sprint.gif) | ![Runner vs chaser game seen from above](docs/chase_overhead.gif) |
-| `g1_turn/model_4349` told to run straight at 5 m/s: it reaches 4.94 m/s and doesn't fall. | Learned vs learned. Blue disc: the runner. Red disc: the chaser's 0.8 m catch radius. Yellow: the 20 × 20 m arena. The chaser pins the runner against the right-hand wall, and the runner steps out and loses. |
+| ![G1 sprinting at 5 m/s](docs/sprint.gif) | ![The game on the patchwork arena, seen from above](docs/terrain.gif) |
+| `g1_turn/model_4349` told to run straight at 5 m/s: it reaches 4.94 m/s and doesn't fall. | Learned vs learned on grass (green), mud (brown) and rocky (sand with dark boxes) cells; a new layout every game. Blue disc: the runner. Red disc: the chaser's 0.8 m catch radius. The first game ends in a catch. In the second, a robot runs into a rocky cell and trips. |
 
 ## Highlights
 
